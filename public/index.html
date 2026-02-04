@@ -11,25 +11,40 @@
   <div id="app">
     <aside id="sidebar">
       <div id="sidebar-header">
-        <h1>Claude Console</h1>
-        <button id="btn-new" title="New session">+</button>
+        <span class="sidebar-title">Projects</span>
+        <button id="btn-add-project" title="Add project">+</button>
       </div>
-      <div id="new-session-form" class="hidden">
-        <input id="input-name" type="text" placeholder="Session name">
-        <input id="input-cwd" type="text" placeholder="Working directory">
-        <div class="form-buttons">
-          <button id="btn-create">Create</button>
-          <button id="btn-cancel">Cancel</button>
-        </div>
-      </div>
-      <ul id="session-list"></ul>
+      <div id="project-list"></div>
     </aside>
     <main id="terminal-container">
       <div id="terminal"></div>
       <div id="no-session">
-        <p>No session selected. Create one or click a session to connect.</p>
+        <button id="btn-home-add-project" class="home-add-btn">Add Project</button>
       </div>
     </main>
+  </div>
+
+  <!-- Add Project Modal -->
+  <div id="modal-overlay" class="hidden">
+    <div id="modal">
+      <h2>Add Project</h2>
+      <label for="modal-project-name">Project Name</label>
+      <input id="modal-project-name" type="text" placeholder="My Project" autofocus>
+      <label for="modal-project-path">Directory</label>
+      <div class="path-input-row">
+        <input id="modal-project-path" type="text" placeholder="Select a directory..." readonly>
+        <button id="btn-browse">Browse</button>
+      </div>
+      <div id="dir-browser" class="hidden">
+        <div id="dir-breadcrumbs"></div>
+        <ul id="dir-list"></ul>
+        <button id="btn-select-dir">Select This Directory</button>
+      </div>
+      <div class="modal-buttons">
+        <button id="btn-modal-cancel">Cancel</button>
+        <button id="btn-modal-create" disabled>Create Project</button>
+      </div>
+    </div>
   </div>
 
   <script src="/vendor/xterm.js"></script>
