@@ -30,13 +30,3 @@ export function save(data) {
   }
 }
 
-// Backward compatibility aliases (temporary - will be removed in Task 3)
-export function loadSessions() {
-  return load().sessions || [];
-}
-
-export function saveSessions(sessions) {
-  const data = load();
-  data.sessions = sessions;
-  save(data);
-}

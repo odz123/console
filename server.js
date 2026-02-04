@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PtyManager } from './pty-manager.js';
-import { loadSessions, saveSessions } from './store.js';
+import { load, save } from './store.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
@@ -22,7 +22,7 @@ export function createServer({ testMode = false } = {}) {
   const manager = new PtyManager();
 
   // In test mode, use bash instead of claude; don't persist
-  let sessions = testMode ? [] : loadSessions();
+  let data = testMode ? { projects: [], sessions: [] } : load();
   const clients = new Set();
 
   app.use(express.json({ limit: '16kb' }));
@@ -78,23 +78,24 @@ export function createServer({ testMode = false } = {}) {
   // --- Helpers ---
 
   function persist() {
-    if (!testMode) saveSessions(sessions);
+    if (!testMode) save(data);
   }
 
-  function safeSend(ws, data) {
+  function safeSend(ws, msg) {
     if (ws.readyState === 1) {
       try {
-        ws.send(data);
+        ws.send(msg);
       } catch {
         // Client disconnected mid-send; ignore
       }
     }
   }
 
-  function broadcastSessions() {
+  function broadcastState() {
     const msg = JSON.stringify({
-      type: 'sessions',
-      sessions: sessions.map((s) => ({
+      type: 'state',
+      projects: data.projects,
+      sessions: data.sessions.map((s) => ({
         ...s,
         alive: manager.isAlive(s.id),
       })),
@@ -105,8 +106,11 @@ export function createServer({ testMode = false } = {}) {
   }
 
   function spawnSession(session) {
+    const project = data.projects.find((p) => p.id === session.projectId);
+    if (!project) throw new Error('Project not found for session');
+
     const spawnOpts = {
-      cwd: session.cwd,
+      cwd: project.cwd,
       ...(testMode
         ? { shell: '/bin/bash', args: ['-c', 'sleep 3600'] }
         : session.claudeSessionId
@@ -119,14 +123,14 @@ export function createServer({ testMode = false } = {}) {
     } catch (e) {
       session.status = 'exited';
       persist();
-      broadcastSessions();
+      broadcastState();
       throw e;
     }
 
     manager.onExit(session.id, () => {
       session.status = 'exited';
       persist();
-      broadcastSessions();
+      broadcastState();
       const msg = JSON.stringify({ type: 'exited', sessionId: session.id });
       for (const ws of clients) {
         safeSend(ws, msg);
@@ -136,13 +140,13 @@ export function createServer({ testMode = false } = {}) {
     // Session ID capture (only for real claude).
     if (!testMode) {
       const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
-      const captureListener = (data) => {
-        const match = data.match(uuidRegex);
+      const captureListener = (d) => {
+        const match = d.match(uuidRegex);
         if (match) {
           session.claudeSessionId = match[0];
           manager.offData(session.id, captureListener);
           persist();
-          broadcastSessions();
+          broadcastState();
         }
       };
       manager.onData(session.id, captureListener);
@@ -154,31 +158,27 @@ export function createServer({ testMode = false } = {}) {
     }
   }
 
-  // --- REST API ---
+  // --- Projects REST API ---
 
-  app.get('/api/sessions', (req, res) => {
-    res.json(
-      sessions.map((s) => ({
+  app.get('/api/projects', (req, res) => {
+    res.json({
+      projects: data.projects,
+      sessions: data.sessions.map((s) => ({
         ...s,
         alive: manager.isAlive(s.id),
-      }))
-    );
+      })),
+    });
   });
 
-  app.post('/api/sessions', (req, res) => {
+  app.post('/api/projects', (req, res) => {
     const { name, cwd } = req.body;
-    if (!name || !cwd) {
-      return res.status(400).json({ error: 'name and cwd are required' });
+    if (!name || typeof name !== 'string' || name.length > MAX_NAME_LENGTH) {
+      return res.status(400).json({ error: `name is required (string, max ${MAX_NAME_LENGTH} chars)` });
+    }
+    if (!cwd || typeof cwd !== 'string' || cwd.length > MAX_CWD_LENGTH) {
+      return res.status(400).json({ error: `cwd is required (string, max ${MAX_CWD_LENGTH} chars)` });
     }
 
-    if (typeof name !== 'string' || name.length > MAX_NAME_LENGTH) {
-      return res.status(400).json({ error: `name must be a string of at most ${MAX_NAME_LENGTH} characters` });
-    }
-    if (typeof cwd !== 'string' || cwd.length > MAX_CWD_LENGTH) {
-      return res.status(400).json({ error: `cwd must be a string of at most ${MAX_CWD_LENGTH} characters` });
-    }
-
-    // Expand ~ and canonicalize cwd
     const expanded = cwd.startsWith('~') ? cwd.replace(/^~/, os.homedir()) : cwd;
     const resolvedCwd = path.resolve(expanded);
     try {
@@ -190,16 +190,71 @@ export function createServer({ testMode = false } = {}) {
       return res.status(400).json({ error: 'cwd does not exist' });
     }
 
-    const session = {
+    const project = {
       id: crypto.randomUUID(),
       name,
       cwd: resolvedCwd,
+      createdAt: new Date().toISOString(),
+    };
+
+    data.projects.push(project);
+    persist();
+    broadcastState();
+    res.status(201).json(project);
+  });
+
+  app.delete('/api/projects/:id', (req, res) => {
+    const idx = data.projects.findIndex((p) => p.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'not found' });
+
+    // Kill all sessions for this project
+    const projectSessions = data.sessions.filter((s) => s.projectId === req.params.id);
+    for (const s of projectSessions) {
+      manager.kill(s.id);
+      // Notify attached clients
+      const msg = JSON.stringify({ type: 'session-deleted', sessionId: s.id });
+      for (const ws of clients) {
+        safeSend(ws, msg);
+      }
+    }
+
+    // Remove sessions and project
+    data.sessions = data.sessions.filter((s) => s.projectId !== req.params.id);
+    data.projects.splice(idx, 1);
+    persist();
+    broadcastState();
+    res.json({ ok: true });
+  });
+
+  // --- Sessions REST API ---
+
+  app.post('/api/projects/:id/sessions', (req, res) => {
+    const project = data.projects.find((p) => p.id === req.params.id);
+    if (!project) return res.status(404).json({ error: 'project not found' });
+
+    const { name } = req.body;
+    if (!name || typeof name !== 'string' || name.length > MAX_NAME_LENGTH) {
+      return res.status(400).json({ error: `name is required (string, max ${MAX_NAME_LENGTH} chars)` });
+    }
+
+    // Validate project cwd still exists
+    try {
+      const stat = fs.statSync(project.cwd);
+      if (!stat.isDirectory()) throw new Error();
+    } catch {
+      return res.status(400).json({ error: 'Project directory no longer exists' });
+    }
+
+    const session = {
+      id: crypto.randomUUID(),
+      projectId: project.id,
+      name,
       claudeSessionId: null,
       status: 'running',
       createdAt: new Date().toISOString(),
     };
 
-    sessions.push(session);
+    data.sessions.push(session);
     persist();
 
     try {
@@ -208,18 +263,46 @@ export function createServer({ testMode = false } = {}) {
       return res.status(500).json({ error: `Failed to spawn: ${e.message}` });
     }
 
-    broadcastSessions();
+    broadcastState();
     res.status(201).json({ ...session, alive: true });
   });
 
+  app.delete('/api/sessions/:id', (req, res) => {
+    const idx = data.sessions.findIndex((s) => s.id === req.params.id);
+    if (idx === -1) return res.status(404).json({ error: 'not found' });
+
+    const session = data.sessions[idx];
+    manager.kill(session.id);
+
+    const msg = JSON.stringify({ type: 'session-deleted', sessionId: session.id });
+    for (const ws of clients) {
+      safeSend(ws, msg);
+    }
+
+    data.sessions.splice(idx, 1);
+    persist();
+    broadcastState();
+    res.json({ ok: true });
+  });
+
   app.post('/api/sessions/:id/restart', (req, res) => {
-    const session = sessions.find((s) => s.id === req.params.id);
+    const session = data.sessions.find((s) => s.id === req.params.id);
     if (!session) return res.status(404).json({ error: 'not found' });
 
-    // Kill existing if alive
-    if (manager.isAlive(session.id)) {
-      manager.kill(session.id);
+    const project = data.projects.find((p) => p.id === session.projectId);
+    if (!project) return res.status(400).json({ error: 'Parent project not found' });
+
+    // Validate cwd
+    try {
+      const stat = fs.statSync(project.cwd);
+      if (!stat.isDirectory()) throw new Error();
+    } catch {
+      return res.status(400).json({ error: 'Project directory no longer exists' });
     }
+
+    // Always kill — even exited processes remain in PtyManager's map and
+    // would cause spawn() to throw "Session already exists"
+    manager.kill(session.id);
 
     session.status = 'running';
     persist();
@@ -230,20 +313,8 @@ export function createServer({ testMode = false } = {}) {
       return res.status(500).json({ error: `Failed to spawn: ${e.message}` });
     }
 
-    broadcastSessions();
+    broadcastState();
     res.json({ ...session, alive: true });
-  });
-
-  app.delete('/api/sessions/:id', (req, res) => {
-    const idx = sessions.findIndex((s) => s.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: 'not found' });
-
-    manager.kill(sessions[idx].id);
-    sessions.splice(idx, 1);
-    persist();
-    broadcastSessions();
-
-    res.json({ ok: true });
   });
 
   // --- WebSocket ---
@@ -252,12 +323,13 @@ export function createServer({ testMode = false } = {}) {
     clients.add(ws);
     let attachedSessionId = null;
 
-    // Send initial session list
+    // Send initial state
     safeSend(
       ws,
       JSON.stringify({
-        type: 'sessions',
-        sessions: sessions.map((s) => ({
+        type: 'state',
+        projects: data.projects,
+        sessions: data.sessions.map((s) => ({
           ...s,
           alive: manager.isAlive(s.id),
         })),
@@ -299,11 +371,11 @@ export function createServer({ testMode = false } = {}) {
           const pendingData = [];
           let replaying = true;
 
-          dataListener = (data) => {
+          dataListener = (d) => {
             if (replaying) {
-              pendingData.push(data);
+              pendingData.push(d);
             } else {
-              safeSend(ws, JSON.stringify({ type: 'output', sessionId, data }));
+              safeSend(ws, JSON.stringify({ type: 'output', sessionId, data: d }));
             }
           };
           manager.onData(sessionId, dataListener);
@@ -317,8 +389,8 @@ export function createServer({ testMode = false } = {}) {
 
           // Flush any data that arrived during replay, then switch to live
           replaying = false;
-          for (const data of pendingData) {
-            safeSend(ws, JSON.stringify({ type: 'output', sessionId, data }));
+          for (const d of pendingData) {
+            safeSend(ws, JSON.stringify({ type: 'output', sessionId, data: d }));
           }
           break;
         }
@@ -350,8 +422,21 @@ export function createServer({ testMode = false } = {}) {
   // --- Startup: resume running sessions ---
 
   if (!testMode) {
-    for (const session of sessions) {
+    for (const session of data.sessions) {
       if (session.status === 'running' && session.claudeSessionId) {
+        const project = data.projects.find((p) => p.id === session.projectId);
+        if (!project) {
+          session.status = 'exited';
+          continue;
+        }
+        try {
+          const stat = fs.statSync(project.cwd);
+          if (!stat.isDirectory()) throw new Error();
+        } catch {
+          console.error(`Project cwd missing for ${session.name}, marking exited`);
+          session.status = 'exited';
+          continue;
+        }
         try {
           spawnSession(session);
           console.log(`Resumed session: ${session.name}`);
