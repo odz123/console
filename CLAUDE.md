@@ -25,3 +25,4 @@ Run before committing:
 
 - Session UUID capture: server.js regex-matches the first UUID from Claude CLI output to enable `claude --resume`. Changes to this logic break session resumption.
 - node-pty postinstall: macOS ARM needs chmod on spawn-helper (handled by postinstall script in package.json)
+- /api/browse endpoint: Serves directory listings restricted to user's home directory. Server MUST remain bound to 127.0.0.1 — never expose this endpoint publicly.
