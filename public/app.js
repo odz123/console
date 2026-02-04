@@ -7,19 +7,27 @@
   let term = null;
   let fitAddon = null;
   let activeSessionId = null;
+  let projects = [];
   let sessions = [];
+  let expandedProjects = new Set();
   let reconnectDelay = 1000;
 
   // --- DOM refs ---
-  const sessionList = document.getElementById('session-list');
+  const projectListEl = document.getElementById('project-list');
   const terminalEl = document.getElementById('terminal');
   const noSession = document.getElementById('no-session');
-  const newForm = document.getElementById('new-session-form');
-  const btnNew = document.getElementById('btn-new');
-  const btnCreate = document.getElementById('btn-create');
-  const btnCancel = document.getElementById('btn-cancel');
-  const inputName = document.getElementById('input-name');
-  const inputCwd = document.getElementById('input-cwd');
+  const btnAddProject = document.getElementById('btn-add-project');
+  const btnHomeAddProject = document.getElementById('btn-home-add-project');
+  const modalOverlay = document.getElementById('modal-overlay');
+  const modalProjectName = document.getElementById('modal-project-name');
+  const modalProjectPath = document.getElementById('modal-project-path');
+  const btnBrowse = document.getElementById('btn-browse');
+  const dirBrowser = document.getElementById('dir-browser');
+  const dirBreadcrumbs = document.getElementById('dir-breadcrumbs');
+  const dirList = document.getElementById('dir-list');
+  const btnSelectDir = document.getElementById('btn-select-dir');
+  const btnModalCancel = document.getElementById('btn-modal-cancel');
+  const btnModalCreate = document.getElementById('btn-modal-create');
 
   // --- Helpers ---
   function wsSend(data) {
@@ -34,6 +42,19 @@
       clearTimeout(timer);
       timer = setTimeout(fn, ms);
     };
+  }
+
+  function relativeTime(isoString) {
+    const diff = Date.now() - new Date(isoString).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    if (days < 30) return `${days}d ago`;
+    const months = Math.floor(days / 30);
+    return `${months}mo ago`;
   }
 
   // --- Terminal setup ---
@@ -63,7 +84,6 @@
       }
     });
 
-    // Debounced resize handler
     const handleResize = debounce(() => {
       if (fitAddon) {
         fitAddon.fit();
@@ -87,9 +107,7 @@
     ws = new WebSocket(`${protocol}//${location.host}/ws`);
 
     ws.onopen = () => {
-      console.log('WebSocket connected');
       reconnectDelay = 1000;
-      // Re-attach if we had a session
       if (activeSessionId) {
         attachSession(activeSessionId);
       }
@@ -97,11 +115,7 @@
 
     ws.onmessage = (event) => {
       let msg;
-      try {
-        msg = JSON.parse(event.data);
-      } catch {
-        return;
-      }
+      try { msg = JSON.parse(event.data); } catch { return; }
 
       switch (msg.type) {
         case 'output':
@@ -113,26 +127,40 @@
         case 'replay-done':
           break;
 
-        case 'sessions':
+        case 'state':
+          projects = msg.projects;
           sessions = msg.sessions;
+          // Reconcile: if active session no longer exists, return to home
+          if (activeSessionId && !sessions.find((s) => s.id === activeSessionId)) {
+            activeSessionId = null;
+            term.reset();
+            noSession.classList.remove('hidden');
+          }
           renderSidebar();
           break;
 
+        case 'session-deleted':
+          if (msg.sessionId === activeSessionId) {
+            activeSessionId = null;
+            term.reset();
+            noSession.classList.remove('hidden');
+          }
+          break;
+
         case 'exited':
+          // Session still exists, just re-render sidebar to update status dot
+          renderSidebar();
           break;
       }
     };
 
     ws.onclose = () => {
       const jitter = reconnectDelay * (0.5 + Math.random());
-      console.log(`WebSocket closed, reconnecting in ${Math.round(jitter)}ms...`);
       setTimeout(connect, jitter);
       reconnectDelay = Math.min(reconnectDelay * 2, 30000);
     };
 
-    ws.onerror = () => {
-      ws.close();
-    };
+    ws.onerror = () => { ws.close(); };
   }
 
   function attachSession(sessionId) {
@@ -153,67 +181,188 @@
 
   // --- Sidebar ---
   function renderSidebar() {
-    sessionList.innerHTML = '';
-    for (const s of sessions) {
-      const li = document.createElement('li');
-      if (s.id === activeSessionId) li.classList.add('active');
+    projectListEl.innerHTML = '';
 
-      // Status dot
-      const dot = document.createElement('span');
-      dot.className = 'status-dot';
-      if (s.alive) {
-        dot.classList.add('alive');
-        dot.title = 'Running';
-      } else if (s.claudeSessionId) {
-        dot.classList.add('exited');
-        dot.title = 'Exited (click to restart)';
-      } else {
-        dot.classList.add('no-resume');
-        dot.title = 'Not resumable';
-      }
+    // Sort projects by createdAt ascending (design spec)
+    const sortedProjects = [...projects].sort((a, b) =>
+      new Date(a.createdAt) - new Date(b.createdAt));
 
-      // Name
+    for (const proj of sortedProjects) {
+      const group = document.createElement('div');
+      group.className = 'project-group';
+      group.dataset.projectId = proj.id;
+
+      // Project header
+      const header = document.createElement('div');
+      header.className = 'project-header';
+
+      const arrow = document.createElement('span');
+      arrow.className = 'project-arrow';
+      if (expandedProjects.has(proj.id)) arrow.classList.add('expanded');
+      arrow.textContent = '\u25B6';
+
       const name = document.createElement('span');
-      name.className = 'session-name';
-      name.textContent = s.name;
+      name.className = 'project-name';
+      name.textContent = proj.name;
 
-      // Delete button
       const del = document.createElement('button');
-      del.className = 'session-delete';
-      del.textContent = '\u00d7';
-      del.title = 'Delete session';
+      del.className = 'project-delete';
+      del.textContent = '\u00D7';
+      del.title = 'Delete project';
       del.onclick = (e) => {
         e.stopPropagation();
-        if (confirm(`Delete session "${s.name}"?`)) {
+        if (confirm(`Delete project "${proj.name}" and all its sessions?`)) {
+          deleteProject(proj.id);
+        }
+      };
+
+      header.appendChild(arrow);
+      header.appendChild(name);
+      header.appendChild(del);
+
+      header.onclick = () => {
+        if (expandedProjects.has(proj.id)) {
+          expandedProjects.delete(proj.id);
+        } else {
+          expandedProjects.add(proj.id);
+        }
+        renderSidebar();
+      };
+
+      group.appendChild(header);
+
+      // Sessions list
+      const projSessions = sessions
+        .filter((s) => s.projectId === proj.id)
+        .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+
+      const ul = document.createElement('ul');
+      ul.className = 'project-sessions';
+      if (expandedProjects.has(proj.id)) ul.classList.add('expanded');
+
+      for (const s of projSessions) {
+        const li = document.createElement('li');
+        if (s.id === activeSessionId) li.classList.add('active');
+
+        const dot = document.createElement('span');
+        dot.className = 'status-dot';
+        dot.classList.add(s.alive ? 'alive' : 'exited');
+
+        const sName = document.createElement('span');
+        sName.className = 'session-name';
+        sName.textContent = s.name;
+
+        const time = document.createElement('span');
+        time.className = 'session-time';
+        time.textContent = relativeTime(s.createdAt);
+
+        const sDel = document.createElement('button');
+        sDel.className = 'session-delete';
+        sDel.textContent = '\u00D7';
+        sDel.title = 'Delete session';
+        sDel.onclick = (e) => {
+          e.stopPropagation();
           deleteSession(s.id);
-        }
+        };
+
+        li.appendChild(dot);
+        li.appendChild(sName);
+        li.appendChild(time);
+        li.appendChild(sDel);
+
+        li.onclick = () => {
+          if (!s.alive && s.claudeSessionId) {
+            restartSession(s.id);
+          }
+          attachSession(s.id);
+        };
+
+        ul.appendChild(li);
+      }
+
+      // New session button
+      const newBtn = document.createElement('button');
+      newBtn.className = 'btn-new-session';
+      newBtn.textContent = '+ New Session';
+      newBtn.onclick = (e) => {
+        e.stopPropagation();
+        showInlineSessionInput(ul, proj.id);
       };
 
-      li.appendChild(dot);
-      li.appendChild(name);
-      li.appendChild(del);
+      if (expandedProjects.has(proj.id)) {
+        ul.appendChild(document.createElement('li')).appendChild(newBtn);
+      }
 
-      li.onclick = () => {
-        if (!s.alive && s.claudeSessionId) {
-          restartSession(s.id);
-        }
-        attachSession(s.id);
-      };
-
-      sessionList.appendChild(li);
+      group.appendChild(ul);
+      projectListEl.appendChild(group);
     }
   }
 
+  function showInlineSessionInput(ul, projectId) {
+    // Remove any existing inline input
+    const existing = ul.querySelector('.inline-session-input');
+    if (existing) { existing.remove(); return; }
+
+    const input = document.createElement('input');
+    input.className = 'inline-session-input';
+    input.type = 'text';
+    input.placeholder = 'Session name...';
+    ul.insertBefore(input, ul.lastElementChild);
+    input.focus();
+
+    input.onkeydown = async (e) => {
+      if (e.key === 'Enter') {
+        const name = input.value.trim();
+        if (!name) return;
+        input.disabled = true;
+        await createSession(projectId, name);
+        input.remove();
+      } else if (e.key === 'Escape') {
+        input.remove();
+      }
+    };
+
+    input.onblur = () => {
+      setTimeout(() => input.remove(), 150);
+    };
+  }
+
   // --- API calls ---
-  async function createSession(name, cwd) {
-    const res = await fetch('/api/sessions', {
+  async function createProject(name, cwd) {
+    const res = await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name, cwd }),
     });
     if (!res.ok) {
       const err = await res.json();
-      alert(err.error || 'Failed to create session');
+      alert(err.error || 'Failed to create project');
+      return null;
+    }
+    return await res.json();
+  }
+
+  async function deleteProject(id) {
+    await fetch(`/api/projects/${id}`, { method: 'DELETE' });
+  }
+
+  async function createSession(projectId, name) {
+    const res = await fetch(`/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      // Show error inline in sidebar near the project's session list
+      const projGroup = projectListEl.querySelector(`[data-project-id="${projectId}"]`);
+      if (projGroup) {
+        const errEl = document.createElement('div');
+        errEl.className = 'inline-error';
+        errEl.textContent = err.error || 'Failed to create session';
+        projGroup.appendChild(errEl);
+        setTimeout(() => errEl.remove(), 4000);
+      }
       return null;
     }
     const session = await res.json();
@@ -234,36 +383,134 @@
     await fetch(`/api/sessions/${id}/restart`, { method: 'POST' });
   }
 
-  // --- Form handlers ---
-  btnNew.onclick = () => {
-    newForm.classList.toggle('hidden');
-    if (!newForm.classList.contains('hidden')) {
-      inputName.focus();
+  // --- Directory Browser ---
+  let browsePath = '';
+  let homedir = ''; // learned from first /api/browse response
+
+  async function loadDir(dirPath) {
+    const url = dirPath
+      ? `/api/browse?path=${encodeURIComponent(dirPath)}`
+      : '/api/browse';
+    const res = await fetch(url);
+    if (!res.ok) return;
+    const data = await res.json();
+    browsePath = data.path;
+
+    // Learn homedir from default browse (no path param)
+    if (!homedir) homedir = data.path;
+
+    // Render breadcrumbs relative to homedir
+    dirBreadcrumbs.innerHTML = '';
+
+    // ~ crumb (always clickable, navigates to homedir)
+    const homeSpan = document.createElement('span');
+    homeSpan.className = 'breadcrumb';
+    homeSpan.textContent = '~';
+    homeSpan.onclick = () => loadDir('');
+    dirBreadcrumbs.appendChild(homeSpan);
+
+    // Only show segments after the homedir prefix
+    const relativePath = data.path.startsWith(homedir)
+      ? data.path.slice(homedir.length)
+      : data.path;
+    const segments = relativePath.split('/').filter(Boolean);
+
+    let accumulated = homedir;
+    for (const seg of segments) {
+      accumulated += '/' + seg;
+      const sep = document.createElement('span');
+      sep.className = 'breadcrumb-sep';
+      sep.textContent = '/';
+      dirBreadcrumbs.appendChild(sep);
+
+      const crumb = document.createElement('span');
+      crumb.className = 'breadcrumb';
+      crumb.textContent = seg;
+      const pathForClick = accumulated;
+      crumb.onclick = () => loadDir(pathForClick);
+      dirBreadcrumbs.appendChild(crumb);
+    }
+
+    // Render directory list
+    dirList.innerHTML = '';
+
+    // Parent directory entry (only if we're deeper than homedir)
+    if (data.parent && data.path !== homedir) {
+      const parentLi = document.createElement('li');
+      parentLi.textContent = '..';
+      parentLi.onclick = () => loadDir(data.parent);
+      dirList.appendChild(parentLi);
+    }
+
+    for (const d of data.dirs) {
+      const li = document.createElement('li');
+      li.textContent = d;
+      li.onclick = () => loadDir(data.path + '/' + d);
+      dirList.appendChild(li);
+    }
+  }
+
+  // --- Modal ---
+  function openModal() {
+    modalProjectName.value = '';
+    modalProjectPath.value = '';
+    dirBrowser.classList.add('hidden');
+    btnModalCreate.disabled = true;
+    modalOverlay.classList.remove('hidden');
+    modalProjectName.focus();
+  }
+
+  function closeModal() {
+    modalOverlay.classList.add('hidden');
+  }
+
+  function updateCreateButton() {
+    btnModalCreate.disabled = !(modalProjectName.value.trim() && modalProjectPath.value.trim());
+  }
+
+  btnAddProject.onclick = openModal;
+  btnHomeAddProject.onclick = openModal;
+
+  btnBrowse.onclick = () => {
+    if (dirBrowser.classList.contains('hidden')) {
+      dirBrowser.classList.remove('hidden');
+      loadDir('');
+    } else {
+      dirBrowser.classList.add('hidden');
     }
   };
 
-  btnCancel.onclick = () => {
-    newForm.classList.add('hidden');
-    inputName.value = '';
-    inputCwd.value = '';
+  btnSelectDir.onclick = () => {
+    modalProjectPath.value = browsePath;
+    dirBrowser.classList.add('hidden');
+    updateCreateButton();
   };
 
-  btnCreate.onclick = async () => {
-    const name = inputName.value.trim();
-    const cwd = inputCwd.value.trim();
+  btnModalCancel.onclick = closeModal;
+
+  btnModalCreate.onclick = async () => {
+    const name = modalProjectName.value.trim();
+    const cwd = modalProjectPath.value.trim();
     if (!name || !cwd) return;
-    await createSession(name, cwd);
-    newForm.classList.add('hidden');
-    inputName.value = '';
-    inputCwd.value = '';
+    btnModalCreate.disabled = true;
+    const proj = await createProject(name, cwd);
+    if (proj) {
+      expandedProjects.add(proj.id);
+      closeModal();
+    }
+    updateCreateButton();
   };
 
-  // Enter key in form
-  inputCwd.onkeydown = (e) => {
-    if (e.key === 'Enter') btnCreate.click();
+  modalProjectName.oninput = updateCreateButton;
+
+  modalOverlay.onclick = (e) => {
+    if (e.target === modalOverlay) closeModal();
   };
-  inputName.onkeydown = (e) => {
-    if (e.key === 'Enter') inputCwd.focus();
+
+  document.onkeydown = (e) => {
+    if (e.key === 'Escape' && !modalOverlay.classList.contains('hidden')) {
+      closeModal();
+    }
   };
 
   // --- Init ---
