@@ -61,7 +61,7 @@
   function initTerminal() {
     term = new Terminal({
       cursorBlink: true,
-      fontSize: 14,
+      fontSize: 13,
       fontFamily: "Menlo, Monaco, 'Courier New', monospace",
       fontWeight: '400',
       fontWeightBold: '600',
