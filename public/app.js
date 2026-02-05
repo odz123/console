@@ -11,6 +11,7 @@
   let sessions = [];
   let expandedProjects = new Set();
   let reconnectDelay = 1000;
+  let toastTimeout = null;
 
   // --- DOM refs ---
   const projectListEl = document.getElementById('project-list');
@@ -55,6 +56,92 @@
     if (days < 30) return `${days}d ago`;
     const months = Math.floor(days / 30);
     return `${months}mo ago`;
+  }
+
+  // --- Toast notifications ---
+  function showToast(message, type = 'info', duration = 4000) {
+    // Remove existing toast if any
+    const existing = document.getElementById('toast');
+    if (existing) {
+      existing.remove();
+      clearTimeout(toastTimeout);
+    }
+
+    const toast = document.createElement('div');
+    toast.id = 'toast';
+    toast.className = `toast toast-${type}`;
+    toast.textContent = message;
+    document.body.appendChild(toast);
+
+    // Trigger animation
+    requestAnimationFrame(() => {
+      toast.classList.add('show');
+    });
+
+    toastTimeout = setTimeout(() => {
+      toast.classList.remove('show');
+      setTimeout(() => toast.remove(), 300);
+    }, duration);
+  }
+
+  // --- Confirmation dialog ---
+  function showConfirmDialog(title, message, onConfirm, onCancel) {
+    const overlay = document.createElement('div');
+    overlay.className = 'confirm-overlay';
+
+    const dialog = document.createElement('div');
+    dialog.className = 'confirm-dialog';
+
+    const titleEl = document.createElement('h3');
+    titleEl.textContent = title;
+
+    const messageEl = document.createElement('p');
+    messageEl.textContent = message;
+
+    const buttons = document.createElement('div');
+    buttons.className = 'confirm-buttons';
+
+    const cancelBtn = document.createElement('button');
+    cancelBtn.className = 'confirm-cancel';
+    cancelBtn.textContent = 'Cancel';
+    cancelBtn.onclick = () => {
+      overlay.remove();
+      if (onCancel) onCancel();
+    };
+
+    const confirmBtn = document.createElement('button');
+    confirmBtn.className = 'confirm-ok';
+    confirmBtn.textContent = 'Delete Anyway';
+    confirmBtn.onclick = () => {
+      overlay.remove();
+      if (onConfirm) onConfirm();
+    };
+
+    buttons.appendChild(cancelBtn);
+    buttons.appendChild(confirmBtn);
+    dialog.appendChild(titleEl);
+    dialog.appendChild(messageEl);
+    dialog.appendChild(buttons);
+    overlay.appendChild(dialog);
+    document.body.appendChild(overlay);
+
+    // Close on overlay click
+    overlay.onclick = (e) => {
+      if (e.target === overlay) {
+        overlay.remove();
+        if (onCancel) onCancel();
+      }
+    };
+
+    // Close on Escape
+    const handleEscape = (e) => {
+      if (e.key === 'Escape') {
+        overlay.remove();
+        document.removeEventListener('keydown', handleEscape);
+        if (onCancel) onCancel();
+      }
+    };
+    document.addEventListener('keydown', handleEscape);
   }
 
   // --- Terminal setup ---
@@ -288,13 +375,44 @@
         dot.className = 'status-dot';
         dot.classList.add(s.alive ? 'alive' : 'exited');
 
+        // Session info container (name + optional branch badge)
+        const infoContainer = document.createElement('div');
+        infoContainer.className = 'session-info';
+
         const sName = document.createElement('span');
         sName.className = 'session-name';
         sName.textContent = s.name;
+        infoContainer.appendChild(sName);
+
+        // Branch badge (if session has worktree)
+        if (s.branchName) {
+          const branchBadge = document.createElement('span');
+          branchBadge.className = 'branch-badge';
+          branchBadge.textContent = s.branchName;
+          branchBadge.title = s.worktreePath || s.branchName;
+          infoContainer.appendChild(branchBadge);
+        }
 
         const time = document.createElement('span');
         time.className = 'session-time';
         time.textContent = relativeTime(s.createdAt);
+
+        // Session actions container
+        const actions = document.createElement('div');
+        actions.className = 'session-actions';
+
+        // Archive button (only show if session has worktree)
+        if (s.worktreePath) {
+          const sArchive = document.createElement('button');
+          sArchive.className = 'session-archive';
+          sArchive.innerHTML = '&#128451;'; // Archive icon
+          sArchive.title = 'Archive (keep branch, remove worktree)';
+          sArchive.onclick = (e) => {
+            e.stopPropagation();
+            archiveSession(s.id, s.branchName);
+          };
+          actions.appendChild(sArchive);
+        }
 
         const sDel = document.createElement('button');
         sDel.className = 'session-delete';
@@ -304,11 +422,12 @@
           e.stopPropagation();
           deleteSession(s.id);
         };
+        actions.appendChild(sDel);
 
         li.appendChild(dot);
-        li.appendChild(sName);
+        li.appendChild(infoContainer);
         li.appendChild(time);
-        li.appendChild(sDel);
+        li.appendChild(actions);
 
         li.onclick = () => {
           if (!s.alive && s.claudeSessionId) {
@@ -394,24 +513,53 @@
     });
     if (!res.ok) {
       const err = await res.json();
+      // Handle specific error codes
+      let errorMessage = err.error || 'Failed to create session';
+      if (err.code === 'WORKTREE_FAILED') {
+        errorMessage = 'Failed to create worktree: ' + (err.error || 'Unknown error');
+      }
       // Show error inline in sidebar near the project's session list
       const projGroup = projectListEl.querySelector(`[data-project-id="${projectId}"]`);
       if (projGroup) {
         const errEl = document.createElement('div');
         errEl.className = 'inline-error';
-        errEl.textContent = err.error || 'Failed to create session';
+        errEl.textContent = errorMessage;
         projGroup.appendChild(errEl);
         setTimeout(() => errEl.remove(), 4000);
       }
       return null;
     }
     const session = await res.json();
+
+    // Show warning toast if .worktrees not in .gitignore
+    if (session.warning) {
+      showToast(session.warning, 'warning', 6000);
+    }
+
     attachSession(session.id);
     return session;
   }
 
-  async function deleteSession(id) {
-    await fetch(`/api/sessions/${id}`, { method: 'DELETE' });
+  async function deleteSession(id, force = false) {
+    const url = force ? `/api/sessions/${id}?force=true` : `/api/sessions/${id}`;
+    const res = await fetch(url, { method: 'DELETE' });
+
+    if (!res.ok) {
+      const err = await res.json();
+      if (err.code === 'DIRTY_WORKTREE') {
+        // Show confirmation dialog for dirty worktree
+        showConfirmDialog(
+          'Uncommitted Changes',
+          'This session has uncommitted changes. Delete anyway?',
+          () => deleteSession(id, true) // Retry with force
+        );
+        return;
+      }
+      // Show other errors as toast
+      showToast(err.error || 'Failed to delete session', 'error');
+      return;
+    }
+
     if (activeSessionId === id) {
       activeSessionId = null;
       term.reset();
@@ -419,8 +567,33 @@
     }
   }
 
+  async function archiveSession(id, branchName) {
+    const res = await fetch(`/api/sessions/${id}/archive`, { method: 'POST' });
+
+    if (!res.ok) {
+      const err = await res.json();
+      showToast(err.error || 'Failed to archive session', 'error');
+      return;
+    }
+
+    const result = await res.json();
+    const msg = branchName
+      ? `Session archived. Branch "${branchName}" preserved.`
+      : 'Session archived successfully.';
+    showToast(msg, 'success');
+  }
+
   async function restartSession(id) {
-    await fetch(`/api/sessions/${id}/restart`, { method: 'POST' });
+    const res = await fetch(`/api/sessions/${id}/restart`, { method: 'POST' });
+
+    if (!res.ok) {
+      const err = await res.json();
+      if (err.code === 'WORKTREE_MISSING') {
+        showToast('Worktree has been removed. Session cannot be restarted.', 'error');
+      } else {
+        showToast(err.error || 'Failed to restart session', 'error');
+      }
+    }
   }
 
   // --- Directory Browser ---

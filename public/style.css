@@ -152,9 +152,7 @@ body {
   cursor: pointer;
   font-size: 12px;
   padding: 0 2px;
-  display: none;
 }
-.project-sessions li:hover .session-delete { display: block; }
 .session-delete:hover { color: #e94560; }
 
 .btn-new-session {
@@ -367,3 +365,149 @@ body {
 #btn-modal-cancel { background: #0f3460; color: #e0e0e0; }
 #btn-modal-create { background: #e94560; color: white; }
 #btn-modal-create:disabled { opacity: 0.4; cursor: not-allowed; }
+
+/* --- Session info and branch badge --- */
+
+.session-info {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.branch-badge {
+  font-size: 10px;
+  color: #569cd6;
+  background: rgba(86, 156, 214, 0.15);
+  padding: 1px 4px;
+  border-radius: 3px;
+  max-width: fit-content;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.session-actions {
+  display: none;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.project-sessions li:hover .session-actions { display: flex; }
+
+.session-archive {
+  background: none;
+  border: none;
+  color: #6b7280;
+  cursor: pointer;
+  font-size: 11px;
+  padding: 0 2px;
+}
+.session-archive:hover { color: #569cd6; }
+
+/* --- Toast notifications --- */
+
+.toast {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  padding: 12px 20px;
+  border-radius: 6px;
+  font-size: 13px;
+  max-width: 400px;
+  z-index: 200;
+  opacity: 0;
+  transform: translateY(10px);
+  transition: opacity 0.3s, transform 0.3s;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.toast.show {
+  opacity: 1;
+  transform: translateY(0);
+}
+
+.toast-info {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  color: #e0e0e0;
+}
+
+.toast-success {
+  background: #0d3320;
+  border: 1px solid #166534;
+  color: #4ade80;
+}
+
+.toast-warning {
+  background: #3d2a0a;
+  border: 1px solid #854d0e;
+  color: #fbbf24;
+}
+
+.toast-error {
+  background: #3d0a0a;
+  border: 1px solid #991b1b;
+  color: #f87171;
+}
+
+/* --- Confirmation dialog --- */
+
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 150;
+}
+
+.confirm-dialog {
+  background: #16213e;
+  border: 1px solid #0f3460;
+  border-radius: 8px;
+  padding: 20px 24px;
+  width: 340px;
+  max-width: 90vw;
+}
+
+.confirm-dialog h3 {
+  font-size: 14px;
+  margin-bottom: 8px;
+  color: #e0e0e0;
+}
+
+.confirm-dialog p {
+  font-size: 13px;
+  color: #9ca3af;
+  margin-bottom: 16px;
+  line-height: 1.4;
+}
+
+.confirm-buttons {
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+}
+
+.confirm-buttons button {
+  padding: 8px 16px;
+  border: none;
+  border-radius: 4px;
+  cursor: pointer;
+  font-size: 13px;
+}
+
+.confirm-cancel {
+  background: #0f3460;
+  color: #e0e0e0;
+}
+.confirm-cancel:hover { background: #1a4a7a; }
+
+.confirm-ok {
+  background: #dc2626;
+  color: white;
+}
+.confirm-ok:hover { background: #ef4444; }
