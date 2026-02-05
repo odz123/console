@@ -157,6 +157,7 @@
           break;
 
         case 'replay-done':
+          term.scrollToBottom();
           break;
 
         case 'state':

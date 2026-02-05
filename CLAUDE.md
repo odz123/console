@@ -20,10 +20,12 @@ npm test           # Run all tests
 Run before committing:
 1. npm test
 2. node --check server.js && node --check pty-manager.js && node --check store.js
-3. UI smoke test: Start server (`npm start`), use Playwright to navigate to http://127.0.0.1:3000 and verify:
+3. UI smoke test: Start server (`npm start`), use Playwright MCP to navigate to http://127.0.0.1:3000 and verify:
    - Sidebar shows "Projects" header with "+" button
    - Main area shows "Add Project" button when no sessions active
    - Clicking "+" opens modal with directory browser
+   - Fetch /app.js and confirm `term.scrollToBottom()` exists in replay-done handler
+   - For terminal changes: create sessions, switch between them, verify scroll position
 
 ## Gotchas
 
