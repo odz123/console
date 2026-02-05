@@ -4,13 +4,15 @@
 
 **Goal:** Add git worktree support so each Claude session runs in an isolated worktree for parallel experimentation.
 
-**Architecture:** New `git-worktree.js` module handles all git operations. Server validates repos at project creation, creates worktrees at session creation. Frontend shows branch info and handles archive/delete flows.
+**Architecture:** New `git-worktree.js` module handles all git operations with per-project mutex for concurrency safety. Server validates repos at project creation, creates worktrees at session creation. Frontend shows branch info and handles archive/delete flows.
 
 **Tech Stack:** Node.js, child_process.execFile, Express REST API, vanilla JS frontend
 
 **Design:** `docs/plans/2026-02-04-worktree-integration-design.md`
 
 **Dex Epic:** `y91ookr7`
+
+**Revision:** v2 - Addresses Codex review feedback (mutex, path safety, error codes, test gaps)
 
 ---
 
@@ -24,9 +26,31 @@
 
 ```javascript
 // test/git-worktree.test.js
-import { describe, it } from 'node:test';
+import { describe, it, beforeEach, afterEach } from 'node:test';
 import assert from 'node:assert';
+import os from 'node:os';
+import fs from 'node:fs';
+import path from 'node:path';
+import { execSync } from 'node:child_process';
 import { sanitizeBranchName } from '../git-worktree.js';
+
+// Set git config for CI environments
+const gitEnv = {
+  GIT_AUTHOR_NAME: 'Test',
+  GIT_AUTHOR_EMAIL: 'test@test.com',
+  GIT_COMMITTER_NAME: 'Test',
+  GIT_COMMITTER_EMAIL: 'test@test.com',
+};
+
+function createTempDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-test-'));
+}
+
+function createTempRepo() {
+  const dir = createTempDir();
+  execSync('git init && git commit --allow-empty -m "init"', { cwd: dir, env: { ...process.env, ...gitEnv } });
+  return dir;
+}
 
 describe('sanitizeBranchName', () => {
   it('lowercases and replaces spaces with hyphens', () => {
@@ -53,8 +77,10 @@ describe('sanitizeBranchName', () => {
     assert.strictEqual(sanitizeBranchName('  trimmed  '), 'trimmed');
   });
 
-  it('removes emoji and non-ASCII', () => {
-    assert.strictEqual(sanitizeBranchName('emojis 🚀'), 'emojis');
+  it('handles accented characters by normalizing', () => {
+    // Design specifies: "émojis 🚀" → "emojis"
+    assert.strictEqual(sanitizeBranchName('émojis 🚀'), 'emojis');
+    assert.strictEqual(sanitizeBranchName('café'), 'cafe');
   });
 
   it('falls back to session for empty result', () => {
@@ -89,6 +115,35 @@ import path from 'node:path';
 
 const execFileAsync = promisify(execFile);
 
+// Per-project mutex map for worktree operations
+const projectLocks = new Map();
+
+/**
+ * Acquire a lock for worktree operations on a project
+ * @param {string} projectId - Project ID
+ * @param {number} timeout - Timeout in ms (default 30000)
+ * @returns {Promise<() => void>} - Release function
+ */
+async function acquireProjectLock(projectId, timeout = 30000) {
+  const startTime = Date.now();
+
+  while (projectLocks.has(projectId)) {
+    if (Date.now() - startTime > timeout) {
+      throw new Error('Timeout waiting for project lock');
+    }
+    await new Promise(resolve => setTimeout(resolve, 50));
+  }
+
+  let releaseFn;
+  const lockPromise = new Promise(resolve => { releaseFn = resolve; });
+  projectLocks.set(projectId, lockPromise);
+
+  return () => {
+    projectLocks.delete(projectId);
+    releaseFn();
+  };
+}
+
 /**
  * Convert session name to branch-safe format (deterministic)
  * @param {string} sessionName - Display name of session
@@ -96,8 +151,11 @@ const execFileAsync = promisify(execFile);
  */
 export function sanitizeBranchName(sessionName) {
   let result = sessionName
+    // Normalize unicode (é → e + combining accent, then remove combining marks)
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
     .toLowerCase()
-    // Remove non-ASCII characters (emoji, accents, etc)
+    // Remove remaining non-ASCII characters (emoji, etc)
     .replace(/[^\x00-\x7F]/g, '')
     // Replace non-alphanumeric with hyphens
     .replace(/[^a-z0-9]+/g, '-')
@@ -125,24 +183,21 @@ Add to `test/git-worktree.test.js`:
 
 ```javascript
 import { validateGitRepo } from '../git-worktree.js';
-import os from 'node:os';
-import fs from 'node:fs';
-import path from 'node:path';
-import { execSync } from 'node:child_process';
 
 describe('validateGitRepo', () => {
   let tempDir;
 
-  function createTempDir() {
-    return fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-test-'));
-  }
+  afterEach(() => {
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+  });
 
   it('returns valid for normal git repo with commits', async () => {
-    tempDir = createTempDir();
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tempDir });
+    tempDir = createTempRepo();
     const result = await validateGitRepo(tempDir);
     assert.strictEqual(result.valid, true);
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('returns NOT_GIT_REPO for non-git directory', async () => {
@@ -150,25 +205,22 @@ describe('validateGitRepo', () => {
     const result = await validateGitRepo(tempDir);
     assert.strictEqual(result.valid, false);
     assert.strictEqual(result.code, 'NOT_GIT_REPO');
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('returns BARE_REPO for bare repository', async () => {
     tempDir = createTempDir();
-    execSync('git init --bare', { cwd: tempDir });
+    execSync('git init --bare', { cwd: tempDir, env: { ...process.env, ...gitEnv } });
     const result = await validateGitRepo(tempDir);
     assert.strictEqual(result.valid, false);
     assert.strictEqual(result.code, 'BARE_REPO');
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('returns EMPTY_REPO for repo with no commits', async () => {
     tempDir = createTempDir();
-    execSync('git init', { cwd: tempDir });
+    execSync('git init', { cwd: tempDir, env: { ...process.env, ...gitEnv } });
     const result = await validateGitRepo(tempDir);
     assert.strictEqual(result.valid, false);
     assert.strictEqual(result.code, 'EMPTY_REPO');
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 });
 ```
@@ -242,7 +294,120 @@ export async function validateGitRepo(dir) {
 Run: `node --test test/git-worktree.test.js`
 Expected: PASS
 
-### Step 9: Write failing tests for createWorktree
+### Step 9: Write failing tests for validateWorktreesDir (path safety)
+
+Add to `test/git-worktree.test.js`:
+
+```javascript
+import { validateWorktreesDir } from '../git-worktree.js';
+
+describe('validateWorktreesDir (path safety)', () => {
+  let tempDir;
+
+  afterEach(() => {
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+  });
+
+  it('returns true for valid .worktrees directory', async () => {
+    tempDir = createTempRepo();
+    fs.mkdirSync(path.join(tempDir, '.worktrees'));
+    const result = await validateWorktreesDir(tempDir);
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('returns true when .worktrees does not exist yet', async () => {
+    tempDir = createTempRepo();
+    const result = await validateWorktreesDir(tempDir);
+    assert.strictEqual(result.valid, true);
+  });
+
+  it('returns false when .worktrees is a symlink', async () => {
+    tempDir = createTempRepo();
+    const outsideDir = createTempDir();
+    fs.symlinkSync(outsideDir, path.join(tempDir, '.worktrees'));
+    const result = await validateWorktreesDir(tempDir);
+    assert.strictEqual(result.valid, false);
+    assert.ok(result.message.includes('symlink'));
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('returns false when .worktrees is a file', async () => {
+    tempDir = createTempRepo();
+    fs.writeFileSync(path.join(tempDir, '.worktrees'), 'not a directory');
+    const result = await validateWorktreesDir(tempDir);
+    assert.strictEqual(result.valid, false);
+  });
+});
+```
+
+### Step 10: Run test to verify it fails
+
+Run: `node --test test/git-worktree.test.js`
+Expected: FAIL with "validateWorktreesDir is not a function"
+
+### Step 11: Implement validateWorktreesDir
+
+Add to `git-worktree.js`:
+
+```javascript
+/**
+ * Validate that .worktrees directory is safe (not a symlink, is a directory or doesn't exist)
+ * @param {string} projectDir - Project root directory
+ * @returns {Promise<{valid: boolean, message?: string}>}
+ */
+export async function validateWorktreesDir(projectDir) {
+  const worktreesPath = path.join(projectDir, '.worktrees');
+
+  try {
+    const lstat = await fs.promises.lstat(worktreesPath);
+
+    if (lstat.isSymbolicLink()) {
+      return {
+        valid: false,
+        message: 'Security violation: .worktrees is a symlink',
+      };
+    }
+
+    if (!lstat.isDirectory()) {
+      return {
+        valid: false,
+        message: '.worktrees exists but is not a directory',
+      };
+    }
+
+    // Verify it resolves inside the project
+    const resolved = await fs.promises.realpath(worktreesPath);
+    // Use path.sep suffix to prevent prefix bypass (e.g., /repo/.worktrees vs /repo/.worktrees-evil)
+    if (!resolved.startsWith(projectDir + path.sep) && resolved !== projectDir) {
+      return {
+        valid: false,
+        message: 'Security violation: .worktrees resolves outside project',
+      };
+    }
+  } catch (err) {
+    if (err.code === 'ENOENT') {
+      // Doesn't exist yet, that's fine
+      return { valid: true };
+    }
+    return {
+      valid: false,
+      message: `Cannot verify .worktrees: ${err.message}`,
+    };
+  }
+
+  return { valid: true };
+}
+```
+
+### Step 12: Run test to verify it passes
+
+Run: `node --test test/git-worktree.test.js`
+Expected: PASS
+
+### Step 13: Write failing tests for createWorktree
 
 Add to `test/git-worktree.test.js`:
 
@@ -252,15 +417,16 @@ import { createWorktree } from '../git-worktree.js';
 describe('createWorktree', () => {
   let tempDir;
 
-  function createTempRepo() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-test-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: dir });
-    return dir;
-  }
+  afterEach(() => {
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+  });
 
   it('creates worktree and branch', async () => {
     tempDir = createTempRepo();
-    await createWorktree(tempDir, 'test-branch');
+    await createWorktree(tempDir, 'test-branch', 'project-123');
 
     // Verify worktree exists
     const worktreePath = path.join(tempDir, '.worktrees', 'test-branch');
@@ -269,27 +435,45 @@ describe('createWorktree', () => {
     // Verify branch exists
     const branches = execSync('git branch', { cwd: tempDir, encoding: 'utf-8' });
     assert.ok(branches.includes('claude/test-branch'));
-
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('rejects path traversal attempts', async () => {
     tempDir = createTempRepo();
     await assert.rejects(
-      () => createWorktree(tempDir, '../escape'),
-      /Invalid branch name/
+      () => createWorktree(tempDir, '../escape', 'project-123'),
+      /INVALID_BRANCH_NAME|Invalid branch name/
     );
-    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('rejects when .worktrees is a symlink', async () => {
+    tempDir = createTempRepo();
+    const outsideDir = createTempDir();
+    fs.symlinkSync(outsideDir, path.join(tempDir, '.worktrees'));
+
+    await assert.rejects(
+      () => createWorktree(tempDir, 'test', 'project-123'),
+      /symlink/
+    );
+
+    fs.rmSync(outsideDir, { recursive: true, force: true });
+  });
+
+  it('returns INVALID_BRANCH_NAME for invalid ref format', async () => {
+    tempDir = createTempRepo();
+    await assert.rejects(
+      () => createWorktree(tempDir, 'test..branch', 'project-123'),
+      /INVALID_BRANCH_NAME|Invalid branch name/
+    );
   });
 });
 ```
 
-### Step 10: Run test to verify it fails
+### Step 14: Run test to verify it fails
 
 Run: `node --test test/git-worktree.test.js`
 Expected: FAIL with "createWorktree is not a function"
 
-### Step 11: Implement createWorktree
+### Step 15: Implement createWorktree with mutex and path safety
 
 Add to `git-worktree.js`:
 
@@ -297,12 +481,12 @@ Add to `git-worktree.js`:
 /**
  * Validate branch name for safety (no path traversal, valid ref format)
  * @param {string} branchName - Branch name to validate
- * @returns {Promise<boolean>}
+ * @returns {Promise<{valid: boolean, code?: string}>}
  */
 async function validateBranchName(branchName) {
   // Reject path traversal
-  if (branchName.includes('..') || branchName.includes('/')) {
-    return false;
+  if (branchName.includes('..') || branchName.includes('/') || branchName.includes('\\')) {
+    return { valid: false, code: 'INVALID_BRANCH_NAME' };
   }
 
   // Validate with git check-ref-format
@@ -310,52 +494,75 @@ async function validateBranchName(branchName) {
     await execFileAsync('git', [
       'check-ref-format',
       '--branch',
+      '--',
       `claude/${branchName}`,
     ]);
-    return true;
+    return { valid: true };
   } catch {
-    return false;
+    return { valid: false, code: 'INVALID_BRANCH_NAME' };
   }
 }
 
 /**
- * Create worktree and branch (with path/ref safety checks)
+ * Create worktree and branch (with path/ref safety checks and mutex)
  * @param {string} projectDir - Project root directory
  * @param {string} branchName - Sanitized branch name (without claude/ prefix)
+ * @param {string} projectId - Project ID for mutex
  * @returns {Promise<void>}
+ * @throws {Error} with code property for specific errors
  */
-export async function createWorktree(projectDir, branchName) {
+export async function createWorktree(projectDir, branchName, projectId) {
   // Validate branch name
-  if (!(await validateBranchName(branchName))) {
-    throw new Error(`Invalid branch name: ${branchName}`);
+  const branchValidation = await validateBranchName(branchName);
+  if (!branchValidation.valid) {
+    const err = new Error(`Invalid branch name: ${branchName}`);
+    err.code = branchValidation.code;
+    throw err;
   }
 
-  const worktreePath = path.join(projectDir, '.worktrees', branchName);
-  const fullBranchName = `claude/${branchName}`;
+  // Validate .worktrees directory (path safety)
+  const dirValidation = await validateWorktreesDir(projectDir);
+  if (!dirValidation.valid) {
+    const err = new Error(dirValidation.message);
+    err.code = 'PATH_SAFETY_VIOLATION';
+    throw err;
+  }
 
-  // Ensure .worktrees directory exists
-  const worktreesDir = path.join(projectDir, '.worktrees');
-  await fs.promises.mkdir(worktreesDir, { recursive: true });
+  // Acquire project lock
+  const release = await acquireProjectLock(projectId);
 
-  // Create worktree with new branch
   try {
-    await execFileAsync(
-      'git',
-      ['worktree', 'add', '-b', fullBranchName, '--', worktreePath],
-      { cwd: projectDir }
-    );
-  } catch (err) {
-    throw new Error(`Failed to create worktree: ${err.stderr || err.message}`);
+    const worktreePath = path.join(projectDir, '.worktrees', branchName);
+    const fullBranchName = `claude/${branchName}`;
+
+    // Ensure .worktrees directory exists
+    const worktreesDir = path.join(projectDir, '.worktrees');
+    await fs.promises.mkdir(worktreesDir, { recursive: true });
+
+    // Create worktree with new branch
+    try {
+      await execFileAsync(
+        'git',
+        ['worktree', 'add', '-b', fullBranchName, '--', worktreePath],
+        { cwd: projectDir }
+      );
+    } catch (err) {
+      const error = new Error(`Failed to create worktree: ${err.stderr || err.message}`);
+      error.code = 'WORKTREE_FAILED';
+      throw error;
+    }
+  } finally {
+    release();
   }
 }
 ```
 
-### Step 12: Run test to verify it passes
+### Step 16: Run test to verify it passes
 
 Run: `node --test test/git-worktree.test.js`
 Expected: PASS
 
-### Step 13: Write failing tests for removeWorktree
+### Step 17: Write failing tests for removeWorktree
 
 Add to `test/git-worktree.test.js`:
 
@@ -366,15 +573,25 @@ describe('removeWorktree', () => {
   let tempDir;
 
   function createTempRepoWithWorktree() {
-    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-test-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: dir });
-    execSync('mkdir -p .worktrees && git worktree add -b claude/test-branch .worktrees/test-branch', { cwd: dir });
+    const dir = createTempRepo();
+    fs.mkdirSync(path.join(dir, '.worktrees'));
+    execSync('git worktree add -b claude/test-branch .worktrees/test-branch', {
+      cwd: dir,
+      env: { ...process.env, ...gitEnv }
+    });
     return dir;
   }
 
+  afterEach(() => {
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+  });
+
   it('removes worktree but keeps branch when deleteBranch=false', async () => {
     tempDir = createTempRepoWithWorktree();
-    await removeWorktree(tempDir, 'test-branch', { deleteBranch: false });
+    await removeWorktree(tempDir, 'test-branch', 'project-123', { deleteBranch: false });
 
     // Verify worktree is gone
     const worktreePath = path.join(tempDir, '.worktrees', 'test-branch');
@@ -383,13 +600,11 @@ describe('removeWorktree', () => {
     // Verify branch still exists
     const branches = execSync('git branch', { cwd: tempDir, encoding: 'utf-8' });
     assert.ok(branches.includes('claude/test-branch'));
-
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('removes worktree and branch when deleteBranch=true', async () => {
     tempDir = createTempRepoWithWorktree();
-    await removeWorktree(tempDir, 'test-branch', { deleteBranch: true });
+    await removeWorktree(tempDir, 'test-branch', 'project-123', { deleteBranch: true });
 
     // Verify worktree is gone
     const worktreePath = path.join(tempDir, '.worktrees', 'test-branch');
@@ -398,146 +613,14 @@ describe('removeWorktree', () => {
     // Verify branch is gone
     const branches = execSync('git branch', { cwd: tempDir, encoding: 'utf-8' });
     assert.ok(!branches.includes('claude/test-branch'));
-
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
-});
-```
 
-### Step 14: Run test to verify it fails
-
-Run: `node --test test/git-worktree.test.js`
-Expected: FAIL with "removeWorktree is not a function"
-
-### Step 15: Implement removeWorktree
-
-Add to `git-worktree.js`:
-
-```javascript
-/**
- * Remove worktree, optionally delete branch (with safety checks)
- * @param {string} projectDir - Project root directory
- * @param {string} branchName - Sanitized branch name (without claude/ prefix)
- * @param {Object} options
- * @param {boolean} options.deleteBranch - Whether to delete the branch too
- * @returns {Promise<void>}
- */
-export async function removeWorktree(projectDir, branchName, { deleteBranch = false } = {}) {
-  // Validate branch name
-  if (!(await validateBranchName(branchName))) {
-    throw new Error(`Invalid branch name: ${branchName}`);
-  }
-
-  const worktreePath = path.join(projectDir, '.worktrees', branchName);
-  const fullBranchName = `claude/${branchName}`;
-
-  // Verify worktree path is inside .worktrees (path safety)
-  const resolvedWorktree = await fs.promises.realpath(worktreePath).catch(() => worktreePath);
-  const worktreesDir = path.join(projectDir, '.worktrees');
-  if (!resolvedWorktree.startsWith(worktreesDir)) {
-    throw new Error('Path safety violation: worktree path escapes .worktrees/');
-  }
-
-  // Remove worktree
-  try {
-    await execFileAsync(
-      'git',
-      ['worktree', 'remove', '--force', '--', worktreePath],
-      { cwd: projectDir }
+  it('rejects path traversal in branch name', async () => {
+    tempDir = createTempRepo();
+    await assert.rejects(
+      () => removeWorktree(tempDir, '../escape', 'project-123', { deleteBranch: true }),
+      /INVALID_BRANCH_NAME|Invalid branch name/
     );
-  } catch (err) {
-    // Worktree might already be removed manually
-    if (!err.stderr?.includes('is not a working tree')) {
-      throw new Error(`Failed to remove worktree: ${err.stderr || err.message}`);
-    }
-  }
-
-  // Delete branch if requested
-  if (deleteBranch) {
-    try {
-      await execFileAsync(
-        'git',
-        ['branch', '-D', '--', fullBranchName],
-        { cwd: projectDir }
-      );
-    } catch (err) {
-      // Branch might already be deleted
-      if (!err.stderr?.includes('not found')) {
-        throw new Error(`Failed to delete branch: ${err.stderr || err.message}`);
-      }
-    }
-  }
-}
-```
-
-### Step 16: Run test to verify it passes
-
-Run: `node --test test/git-worktree.test.js`
-Expected: PASS
-
-### Step 17: Write failing tests for remaining functions
-
-Add to `test/git-worktree.test.js`:
-
-```javascript
-import { worktreeExists, isWorktreeDirty, isWorktreesIgnored } from '../git-worktree.js';
-
-describe('worktreeExists', () => {
-  it('returns true when worktree exists', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-test-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tempDir });
-    execSync('mkdir -p .worktrees && git worktree add -b claude/exists .worktrees/exists', { cwd: tempDir });
-
-    assert.strictEqual(await worktreeExists(tempDir, 'exists'), true);
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  it('returns false when worktree does not exist', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-test-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tempDir });
-
-    assert.strictEqual(await worktreeExists(tempDir, 'missing'), false);
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-});
-
-describe('isWorktreeDirty', () => {
-  it('returns false for clean worktree', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-test-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tempDir });
-    execSync('mkdir -p .worktrees && git worktree add -b claude/clean .worktrees/clean', { cwd: tempDir });
-
-    assert.strictEqual(await isWorktreeDirty(tempDir, 'clean'), false);
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  it('returns true for dirty worktree', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-test-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tempDir });
-    execSync('mkdir -p .worktrees && git worktree add -b claude/dirty .worktrees/dirty', { cwd: tempDir });
-    fs.writeFileSync(path.join(tempDir, '.worktrees', 'dirty', 'newfile.txt'), 'content');
-
-    assert.strictEqual(await isWorktreeDirty(tempDir, 'dirty'), true);
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-});
-
-describe('isWorktreesIgnored', () => {
-  it('returns true when .worktrees/ is in .gitignore', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-test-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tempDir });
-    fs.writeFileSync(path.join(tempDir, '.gitignore'), '.worktrees/\n');
-
-    assert.strictEqual(await isWorktreesIgnored(tempDir), true);
-    fs.rmSync(tempDir, { recursive: true, force: true });
-  });
-
-  it('returns false when .worktrees/ is not in .gitignore', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-test-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tempDir });
-
-    assert.strictEqual(await isWorktreesIgnored(tempDir), false);
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 });
 ```
@@ -545,26 +628,234 @@ describe('isWorktreesIgnored', () => {
 ### Step 18: Run test to verify it fails
 
 Run: `node --test test/git-worktree.test.js`
-Expected: FAIL with functions not defined
+Expected: FAIL with "removeWorktree is not a function"
 
-### Step 19: Implement remaining functions
+### Step 19: Implement removeWorktree with mutex and path safety
 
 Add to `git-worktree.js`:
 
 ```javascript
 /**
- * Check if worktree directory exists
+ * Remove worktree, optionally delete branch (with safety checks and mutex)
+ * @param {string} projectDir - Project root directory
+ * @param {string} branchName - Sanitized branch name (without claude/ prefix)
+ * @param {string} projectId - Project ID for mutex
+ * @param {Object} options
+ * @param {boolean} options.deleteBranch - Whether to delete the branch too
+ * @returns {Promise<void>}
+ */
+export async function removeWorktree(projectDir, branchName, projectId, { deleteBranch = false } = {}) {
+  // Validate branch name
+  const branchValidation = await validateBranchName(branchName);
+  if (!branchValidation.valid) {
+    const err = new Error(`Invalid branch name: ${branchName}`);
+    err.code = branchValidation.code;
+    throw err;
+  }
+
+  // Acquire project lock
+  const release = await acquireProjectLock(projectId);
+
+  try {
+    const worktreePath = path.join(projectDir, '.worktrees', branchName);
+    const fullBranchName = `claude/${branchName}`;
+
+    // Verify worktree path is inside .worktrees (path safety)
+    // Use path.sep suffix to prevent prefix bypass
+    const worktreesDir = path.join(projectDir, '.worktrees');
+    const resolvedWorktree = await fs.promises.realpath(worktreePath).catch(() => worktreePath);
+    if (!resolvedWorktree.startsWith(worktreesDir + path.sep) && resolvedWorktree !== worktreesDir) {
+      throw new Error('Path safety violation: worktree path escapes .worktrees/');
+    }
+
+    // Remove worktree
+    try {
+      await execFileAsync(
+        'git',
+        ['worktree', 'remove', '--force', '--', worktreePath],
+        { cwd: projectDir }
+      );
+    } catch (err) {
+      // Worktree might already be removed manually
+      if (!err.stderr?.includes('is not a working tree') && !err.stderr?.includes('is not a valid')) {
+        throw new Error(`Failed to remove worktree: ${err.stderr || err.message}`);
+      }
+    }
+
+    // Delete branch if requested
+    if (deleteBranch) {
+      try {
+        await execFileAsync(
+          'git',
+          ['branch', '-D', '--', fullBranchName],
+          { cwd: projectDir }
+        );
+      } catch (err) {
+        // Branch might already be deleted
+        if (!err.stderr?.includes('not found')) {
+          throw new Error(`Failed to delete branch: ${err.stderr || err.message}`);
+        }
+      }
+    }
+  } finally {
+    release();
+  }
+}
+```
+
+### Step 20: Run test to verify it passes
+
+Run: `node --test test/git-worktree.test.js`
+Expected: PASS
+
+### Step 21: Write failing tests for worktreeExists (using git worktree list)
+
+Add to `test/git-worktree.test.js`:
+
+```javascript
+import { worktreeExists } from '../git-worktree.js';
+
+describe('worktreeExists', () => {
+  let tempDir;
+
+  afterEach(() => {
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+  });
+
+  it('returns true when worktree is registered with git', async () => {
+    tempDir = createTempRepo();
+    fs.mkdirSync(path.join(tempDir, '.worktrees'));
+    execSync('git worktree add -b claude/exists .worktrees/exists', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv }
+    });
+
+    assert.strictEqual(await worktreeExists(tempDir, 'exists'), true);
+  });
+
+  it('returns false when worktree is not registered', async () => {
+    tempDir = createTempRepo();
+    assert.strictEqual(await worktreeExists(tempDir, 'missing'), false);
+  });
+
+  it('returns false when directory exists but is not a registered worktree', async () => {
+    tempDir = createTempRepo();
+    // Create directory manually without git worktree add
+    fs.mkdirSync(path.join(tempDir, '.worktrees', 'fake'), { recursive: true });
+    assert.strictEqual(await worktreeExists(tempDir, 'fake'), false);
+  });
+});
+```
+
+### Step 22: Run test to verify it fails
+
+Run: `node --test test/git-worktree.test.js`
+Expected: FAIL with "worktreeExists is not a function"
+
+### Step 23: Implement worktreeExists using git worktree list
+
+Add to `git-worktree.js`:
+
+```javascript
+/**
+ * Check if worktree is registered with git (not just filesystem check)
  * @param {string} projectDir - Project root directory
  * @param {string} branchName - Sanitized branch name
  * @returns {Promise<boolean>}
  */
 export async function worktreeExists(projectDir, branchName) {
   const worktreePath = path.join(projectDir, '.worktrees', branchName);
+
   try {
-    await fs.promises.access(worktreePath);
-    return true;
+    // Use git worktree list to verify it's a real registered worktree
+    const { stdout } = await execFileAsync(
+      'git',
+      ['worktree', 'list', '--porcelain'],
+      { cwd: projectDir }
+    );
+
+    // Parse output to find our worktree
+    const resolvedPath = await fs.promises.realpath(worktreePath).catch(() => worktreePath);
+    return stdout.includes(`worktree ${resolvedPath}`);
   } catch {
     return false;
+  }
+}
+```
+
+### Step 24: Run test to verify it passes
+
+Run: `node --test test/git-worktree.test.js`
+Expected: PASS
+
+### Step 25: Write failing tests for isWorktreeDirty (with error handling)
+
+Add to `test/git-worktree.test.js`:
+
+```javascript
+import { isWorktreeDirty, WorktreeDirtyCheckError } from '../git-worktree.js';
+
+describe('isWorktreeDirty', () => {
+  let tempDir;
+
+  function createTempRepoWithWorktree() {
+    const dir = createTempRepo();
+    fs.mkdirSync(path.join(dir, '.worktrees'));
+    execSync('git worktree add -b claude/test .worktrees/test', {
+      cwd: dir,
+      env: { ...process.env, ...gitEnv }
+    });
+    return dir;
+  }
+
+  afterEach(() => {
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+  });
+
+  it('returns false for clean worktree', async () => {
+    tempDir = createTempRepoWithWorktree();
+    assert.strictEqual(await isWorktreeDirty(tempDir, 'test'), false);
+  });
+
+  it('returns true for dirty worktree', async () => {
+    tempDir = createTempRepoWithWorktree();
+    fs.writeFileSync(path.join(tempDir, '.worktrees', 'test', 'newfile.txt'), 'content');
+    assert.strictEqual(await isWorktreeDirty(tempDir, 'test'), true);
+  });
+
+  it('throws WorktreeDirtyCheckError when worktree does not exist', async () => {
+    tempDir = createTempRepo();
+    await assert.rejects(
+      () => isWorktreeDirty(tempDir, 'nonexistent'),
+      WorktreeDirtyCheckError
+    );
+  });
+});
+```
+
+### Step 26: Run test to verify it fails
+
+Run: `node --test test/git-worktree.test.js`
+Expected: FAIL with "isWorktreeDirty is not a function"
+
+### Step 27: Implement isWorktreeDirty with proper error handling
+
+Add to `git-worktree.js`:
+
+```javascript
+/**
+ * Error thrown when dirty check cannot be performed
+ */
+export class WorktreeDirtyCheckError extends Error {
+  constructor(message) {
+    super(message);
+    this.name = 'WorktreeDirtyCheckError';
   }
 }
 
@@ -573,9 +864,11 @@ export async function worktreeExists(projectDir, branchName) {
  * @param {string} projectDir - Project root directory
  * @param {string} branchName - Sanitized branch name
  * @returns {Promise<boolean>}
+ * @throws {WorktreeDirtyCheckError} when check cannot be performed
  */
 export async function isWorktreeDirty(projectDir, branchName) {
   const worktreePath = path.join(projectDir, '.worktrees', branchName);
+
   try {
     const { stdout } = await execFileAsync(
       'git',
@@ -583,50 +876,155 @@ export async function isWorktreeDirty(projectDir, branchName) {
       { cwd: worktreePath }
     );
     return stdout.trim().length > 0;
-  } catch {
-    return false;
+  } catch (err) {
+    // Don't silently return false - throw so caller knows check failed
+    throw new WorktreeDirtyCheckError(
+      `Cannot check dirty status: ${err.stderr || err.message}`
+    );
   }
 }
+```
 
+### Step 28: Run test to verify it passes
+
+Run: `node --test test/git-worktree.test.js`
+Expected: PASS
+
+### Step 29: Write failing tests for isWorktreesIgnored
+
+Add to `test/git-worktree.test.js`:
+
+```javascript
+import { isWorktreesIgnored } from '../git-worktree.js';
+
+describe('isWorktreesIgnored', () => {
+  let tempDir;
+
+  afterEach(() => {
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+  });
+
+  it('returns true when .worktrees/ is in .gitignore', async () => {
+    tempDir = createTempRepo();
+    fs.writeFileSync(path.join(tempDir, '.gitignore'), '.worktrees/\n');
+    assert.strictEqual(await isWorktreesIgnored(tempDir), true);
+  });
+
+  it('returns true when .worktrees is in .gitignore (without slash)', async () => {
+    tempDir = createTempRepo();
+    fs.writeFileSync(path.join(tempDir, '.gitignore'), '.worktrees\n');
+    assert.strictEqual(await isWorktreesIgnored(tempDir), true);
+  });
+
+  it('returns false when .worktrees/ is not in .gitignore', async () => {
+    tempDir = createTempRepo();
+    assert.strictEqual(await isWorktreesIgnored(tempDir), false);
+  });
+});
+```
+
+### Step 30: Run test to verify it fails
+
+Run: `node --test test/git-worktree.test.js`
+Expected: FAIL with "isWorktreesIgnored is not a function"
+
+### Step 31: Implement isWorktreesIgnored
+
+Add to `git-worktree.js`:
+
+```javascript
 /**
  * Check if .worktrees/ is in .gitignore
  * @param {string} projectDir - Project root directory
  * @returns {Promise<boolean>}
  */
 export async function isWorktreesIgnored(projectDir) {
-  try {
-    // Use git check-ignore to see if .worktrees would be ignored
-    await execFileAsync(
-      'git',
-      ['check-ignore', '-q', '.worktrees'],
-      { cwd: projectDir }
-    );
-    return true;
-  } catch {
-    return false;
+  // Check both .worktrees and .worktrees/ patterns
+  for (const pattern of ['.worktrees', '.worktrees/']) {
+    try {
+      await execFileAsync(
+        'git',
+        ['check-ignore', '-q', '--', pattern],
+        { cwd: projectDir }
+      );
+      return true;
+    } catch {
+      // Not ignored by this pattern, try next
+    }
   }
+  return false;
 }
 ```
 
-### Step 20: Run all tests to verify they pass
+### Step 32: Run all git-worktree tests to verify they pass
 
 Run: `node --test test/git-worktree.test.js`
 Expected: All PASS
 
-### Step 21: Commit
+### Step 33: Write test for concurrent operations (race condition)
+
+Add to `test/git-worktree.test.js`:
+
+```javascript
+describe('Concurrency', () => {
+  let tempDir;
+
+  afterEach(() => {
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+  });
+
+  it('handles concurrent worktree creation safely', async () => {
+    tempDir = createTempRepo();
+    const projectId = 'test-project';
+
+    // Try to create multiple worktrees concurrently
+    const results = await Promise.allSettled([
+      createWorktree(tempDir, 'branch-1', projectId),
+      createWorktree(tempDir, 'branch-2', projectId),
+      createWorktree(tempDir, 'branch-3', projectId),
+    ]);
+
+    // All should succeed (mutex ensures sequential execution)
+    const successes = results.filter(r => r.status === 'fulfilled');
+    assert.strictEqual(successes.length, 3);
+
+    // Verify all worktrees exist
+    assert.ok(await worktreeExists(tempDir, 'branch-1'));
+    assert.ok(await worktreeExists(tempDir, 'branch-2'));
+    assert.ok(await worktreeExists(tempDir, 'branch-3'));
+  });
+});
+```
+
+### Step 34: Run test to verify it passes
+
+Run: `node --test test/git-worktree.test.js`
+Expected: PASS
+
+### Step 35: Commit
 
 ```bash
 git add git-worktree.js test/git-worktree.test.js
 git commit -m "$(cat <<'EOF'
-feat: add git-worktree.js helper module
+feat: add git-worktree.js helper module with safety features
 
-- sanitizeBranchName(): convert session names to branch-safe format
+- sanitizeBranchName(): normalize unicode, convert to branch-safe format
 - validateGitRepo(): check for valid git repo (not bare, has commits)
-- createWorktree(): create worktree and branch with safety checks
-- removeWorktree(): remove worktree, optionally delete branch
-- worktreeExists(): check if worktree directory exists
-- isWorktreeDirty(): check for uncommitted changes
-- isWorktreesIgnored(): check if .worktrees/ is gitignored
+- validateWorktreesDir(): path safety - reject symlinks, verify containment
+- createWorktree(): create worktree with mutex and safety checks
+- removeWorktree(): remove worktree with mutex and safety checks
+- worktreeExists(): verify via git worktree list (not just filesystem)
+- isWorktreeDirty(): throw error if check fails (don't silently return false)
+- isWorktreesIgnored(): check both .worktrees and .worktrees/ patterns
+- Per-project mutex prevents race conditions
+- Path safety: reject symlinks, use path.sep suffix for containment checks
+- Ref safety: validate with git check-ref-format, use -- separator
 EOF
 )"
 ```
@@ -649,9 +1047,30 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 
+const gitEnv = {
+  GIT_AUTHOR_NAME: 'Test',
+  GIT_AUTHOR_EMAIL: 'test@test.com',
+  GIT_COMMITTER_NAME: 'Test',
+  GIT_COMMITTER_EMAIL: 'test@test.com',
+};
+
+function createTempDir() {
+  return fs.mkdtempSync(path.join(os.tmpdir(), 'server-test-'));
+}
+
+function createTempRepo() {
+  const dir = createTempDir();
+  execSync('git init && git commit --allow-empty -m "init"', {
+    cwd: dir,
+    env: { ...process.env, ...gitEnv }
+  });
+  return dir;
+}
+
 describe('Projects API - Git Validation', () => {
   let server;
   let baseUrl;
+  let tempDirs = [];
 
   before(async () => {
     server = createServer({ testMode: true });
@@ -661,10 +1080,14 @@ describe('Projects API - Git Validation', () => {
 
   after(async () => {
     await server.destroy();
+    for (const dir of tempDirs) {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it('POST /api/projects rejects non-git directory', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'not-git-'));
+    const tempDir = createTempDir();
+    tempDirs.push(tempDir);
     const res = await fetch(`${baseUrl}/api/projects`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -673,12 +1096,12 @@ describe('Projects API - Git Validation', () => {
     assert.strictEqual(res.status, 400);
     const data = await res.json();
     assert.strictEqual(data.code, 'NOT_GIT_REPO');
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('POST /api/projects rejects bare repository', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'bare-'));
-    execSync('git init --bare', { cwd: tempDir });
+    const tempDir = createTempDir();
+    tempDirs.push(tempDir);
+    execSync('git init --bare', { cwd: tempDir, env: { ...process.env, ...gitEnv } });
     const res = await fetch(`${baseUrl}/api/projects`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -687,12 +1110,12 @@ describe('Projects API - Git Validation', () => {
     assert.strictEqual(res.status, 400);
     const data = await res.json();
     assert.strictEqual(data.code, 'BARE_REPO');
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('POST /api/projects rejects empty repository', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'empty-'));
-    execSync('git init', { cwd: tempDir });
+    const tempDir = createTempDir();
+    tempDirs.push(tempDir);
+    execSync('git init', { cwd: tempDir, env: { ...process.env, ...gitEnv } });
     const res = await fetch(`${baseUrl}/api/projects`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -701,19 +1124,17 @@ describe('Projects API - Git Validation', () => {
     assert.strictEqual(res.status, 400);
     const data = await res.json();
     assert.strictEqual(data.code, 'EMPTY_REPO');
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 
   it('POST /api/projects accepts valid git repository', async () => {
-    const tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'valid-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tempDir });
+    const tempDir = createTempRepo();
+    tempDirs.push(tempDir);
     const res = await fetch(`${baseUrl}/api/projects`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'valid', cwd: tempDir }),
     });
     assert.strictEqual(res.status, 201);
-    fs.rmSync(tempDir, { recursive: true, force: true });
   });
 });
 ```
@@ -725,13 +1146,23 @@ Expected: FAIL - non-git directory currently accepted
 
 ### Step 3: Add git validation to POST /api/projects
 
-In `server.js`, import and add validation:
+In `server.js`, update imports and handler:
 
 ```javascript
 // At top of server.js, add import
-import { validateGitRepo } from './git-worktree.js';
+import {
+  validateGitRepo,
+  validateWorktreesDir,
+  sanitizeBranchName,
+  createWorktree,
+  removeWorktree,
+  worktreeExists,
+  isWorktreeDirty,
+  isWorktreesIgnored,
+  WorktreeDirtyCheckError,
+} from './git-worktree.js';
 
-// In POST /api/projects handler, after directory exists check:
+// In POST /api/projects handler, after directory exists check, add:
 // Add git repo validation
 const gitResult = await validateGitRepo(resolvedCwd);
 if (!gitResult.valid) {
@@ -747,7 +1178,7 @@ if (!gitResult.valid) {
 Run: `node --test test/server.test.js`
 Expected: Git validation tests PASS
 
-### Step 5: Write failing test for session worktree creation
+### Step 5: Write failing test for session creation with worktree
 
 Add to `test/server.test.js`:
 
@@ -763,11 +1194,8 @@ describe('Sessions API - Worktree Creation', () => {
     await new Promise((resolve) => server.listen(0, resolve));
     baseUrl = `http://localhost:${server.address().port}`;
 
-    // Create a valid git repo
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'worktree-session-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tempDir });
+    tempDir = createTempRepo();
 
-    // Create a project
     const res = await fetch(`${baseUrl}/api/projects`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -791,9 +1219,10 @@ describe('Sessions API - Worktree Creation', () => {
     assert.strictEqual(res.status, 201);
     const session = await res.json();
 
-    // Verify branchName and worktreePath are set
+    // branchName should use session ID (first 7 chars)
     assert.ok(session.branchName);
     assert.ok(session.branchName.startsWith('fix-bug-'));
+    assert.strictEqual(session.branchName.split('-').pop().length, 7);
     assert.ok(session.worktreePath);
 
     // Verify worktree exists on disk
@@ -803,6 +1232,18 @@ describe('Sessions API - Worktree Creation', () => {
     // Verify branch exists
     const branches = execSync('git branch', { cwd: tempDir, encoding: 'utf-8' });
     assert.ok(branches.includes(`claude/${session.branchName}`));
+  });
+
+  it('returns INVALID_BRANCH_NAME for session names that produce invalid branches', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: '../escape' }),
+    });
+    // Should fail with INVALID_BRANCH_NAME or WORKTREE_FAILED
+    assert.strictEqual(res.status, 400);
+    const data = await res.json();
+    assert.ok(['INVALID_BRANCH_NAME', 'WORKTREE_FAILED'].includes(data.code));
   });
 });
 ```
@@ -817,79 +1258,236 @@ Expected: FAIL - branchName not set
 In `server.js`, update `POST /api/projects/:id/sessions`:
 
 ```javascript
-// Import at top
-import {
-  validateGitRepo,
-  sanitizeBranchName,
-  createWorktree,
-  removeWorktree,
-  worktreeExists,
-  isWorktreeDirty,
-  isWorktreesIgnored,
-} from './git-worktree.js';
+app.post('/api/projects/:id/sessions', async (req, res) => {
+  const project = data.projects.find((p) => p.id === req.params.id);
+  if (!project) return res.status(404).json({ error: 'project not found' });
 
-// In POST /api/projects/:id/sessions handler, before creating session object:
-// Generate branch name
-const baseName = sanitizeBranchName(name);
-const shortId = crypto.randomUUID().slice(0, 7);
-const branchName = `${baseName}-${shortId}`;
-const worktreePath = `.worktrees/${branchName}`;
+  const { name } = req.body;
+  if (!name || typeof name !== 'string' || name.length > MAX_NAME_LENGTH) {
+    return res.status(400).json({ error: `name is required (string, max ${MAX_NAME_LENGTH} chars)` });
+  }
 
-// Create worktree
-try {
-  await createWorktree(project.cwd, branchName);
-} catch (err) {
-  return res.status(400).json({
-    error: err.message,
-    code: 'WORKTREE_FAILED',
-  });
-}
+  // Validate project cwd still exists
+  try {
+    const stat = fs.statSync(project.cwd);
+    if (!stat.isDirectory()) throw new Error();
+  } catch {
+    return res.status(400).json({ error: 'Project directory no longer exists' });
+  }
 
-// Check if .worktrees is gitignored (non-blocking warning)
-const ignored = await isWorktreesIgnored(project.cwd);
+  // Generate branch name using session ID (first 7 chars)
+  const sessionId = crypto.randomUUID();
+  const baseName = sanitizeBranchName(name);
+  const shortId = sessionId.slice(0, 7);  // Use session UUID, not random
+  const branchName = `${baseName}-${shortId}`;
+  const worktreePath = `.worktrees/${branchName}`;
 
-// Update session object creation:
-const session = {
-  id: crypto.randomUUID(),
-  projectId: project.id,
-  name,
-  claudeSessionId: null,
-  status: 'running',
-  createdAt: new Date().toISOString(),
-  branchName,      // NEW
-  worktreePath,    // NEW
-};
+  // Create worktree
+  try {
+    await createWorktree(project.cwd, branchName, project.id);
+  } catch (err) {
+    return res.status(400).json({
+      error: err.message,
+      code: err.code || 'WORKTREE_FAILED',
+    });
+  }
 
-// Update spawnSession to use worktree path:
-// In spawnSession function, change cwd:
-const spawnOpts = {
-  cwd: path.join(project.cwd, session.worktreePath || ''),  // Use worktree if set
-  // ... rest unchanged
-};
+  // Check if .worktrees is gitignored (non-blocking warning)
+  const ignored = await isWorktreesIgnored(project.cwd);
 
-// Add warning to response if not ignored:
-const response = { ...session, alive: true };
-if (!ignored) {
-  response.warning = 'Consider adding .worktrees/ to your .gitignore';
-}
-res.status(201).json(response);
+  const session = {
+    id: sessionId,
+    projectId: project.id,
+    name,
+    claudeSessionId: null,
+    status: 'running',
+    createdAt: new Date().toISOString(),
+    branchName,
+    worktreePath,
+  };
+
+  data.sessions.push(session);
+  persist();
+
+  try {
+    spawnSession(session);
+  } catch (e) {
+    // Clean up worktree on spawn failure
+    try {
+      await removeWorktree(project.cwd, branchName, project.id, { deleteBranch: true });
+    } catch { /* ignore */ }
+    data.sessions.pop();
+    persist();
+    return res.status(500).json({ error: `Failed to spawn: ${e.message}` });
+  }
+
+  broadcastState();
+
+  const response = { ...session, alive: true };
+  if (!ignored) {
+    response.warning = 'Consider adding .worktrees/ to your .gitignore';
+  }
+  res.status(201).json(response);
+});
 ```
 
-### Step 8: Run test to verify it passes
+### Step 8: Update spawnSession to use worktree path
+
+In `server.js`, update `spawnSession`:
+
+```javascript
+function spawnSession(session) {
+  const project = data.projects.find((p) => p.id === session.projectId);
+  if (!project) throw new Error('Project not found for session');
+
+  // Use worktree path if set, otherwise project cwd
+  const sessionCwd = session.worktreePath
+    ? path.join(project.cwd, session.worktreePath)
+    : project.cwd;
+
+  const spawnOpts = {
+    cwd: sessionCwd,
+    ...(testMode
+      ? { shell: '/bin/bash', args: ['-c', 'sleep 3600'] }
+      : session.claudeSessionId
+        ? { resumeId: session.claudeSessionId }
+        : {}),
+  };
+  // ... rest unchanged
+}
+```
+
+### Step 9: Run test to verify it passes
 
 Run: `node --test test/server.test.js`
 Expected: PASS
 
-### Step 9: Write failing test for archive endpoint
+### Step 10: Write failing test for restart with missing worktree
+
+Add to `test/server.test.js`:
+
+```javascript
+describe('Sessions API - Restart', () => {
+  let server;
+  let baseUrl;
+  let tempDir;
+  let projectId;
+
+  before(async () => {
+    server = createServer({ testMode: true });
+    await new Promise((resolve) => server.listen(0, resolve));
+    baseUrl = `http://localhost:${server.address().port}`;
+
+    tempDir = createTempRepo();
+
+    const res = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'restart-test', cwd: tempDir }),
+    });
+    const proj = await res.json();
+    projectId = proj.id;
+  });
+
+  after(async () => {
+    await server.destroy();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
+
+  it('returns WORKTREE_MISSING when worktree was removed', async () => {
+    // Create session
+    const createRes = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'restart-missing' }),
+    });
+    const session = await createRes.json();
+
+    // Manually remove the worktree
+    const worktreePath = path.join(tempDir, session.worktreePath);
+    execSync(`git worktree remove --force "${worktreePath}"`, { cwd: tempDir });
+
+    // Try to restart
+    const res = await fetch(`${baseUrl}/api/sessions/${session.id}/restart`, {
+      method: 'POST',
+    });
+    assert.strictEqual(res.status, 400);
+    const data = await res.json();
+    assert.strictEqual(data.code, 'WORKTREE_MISSING');
+  });
+});
+```
+
+### Step 11: Run test to verify it fails
+
+Run: `node --test test/server.test.js`
+Expected: FAIL - WORKTREE_MISSING not returned
+
+### Step 12: Update restart to check worktree exists
+
+Update `POST /api/sessions/:id/restart` in `server.js`:
+
+```javascript
+app.post('/api/sessions/:id/restart', async (req, res) => {
+  const session = data.sessions.find((s) => s.id === req.params.id);
+  if (!session) return res.status(404).json({ error: 'not found' });
+
+  const project = data.projects.find((p) => p.id === session.projectId);
+  if (!project) return res.status(400).json({ error: 'Parent project not found' });
+
+  // Check worktree exists if session has one
+  if (session.branchName) {
+    const exists = await worktreeExists(project.cwd, session.branchName);
+    if (!exists) {
+      return res.status(400).json({
+        error: 'Worktree was removed. Delete this session and create a new one.',
+        code: 'WORKTREE_MISSING',
+      });
+    }
+  }
+
+  // ... rest of existing restart logic
+});
+```
+
+### Step 13: Run test to verify it passes
+
+Run: `node --test test/server.test.js`
+Expected: PASS
+
+### Step 14: Write failing test for archive endpoint
 
 Add to `test/server.test.js`:
 
 ```javascript
 describe('Sessions API - Archive', () => {
-  // ... setup similar to above
+  let server;
+  let baseUrl;
+  let tempDir;
+  let projectId;
+
+  before(async () => {
+    server = createServer({ testMode: true });
+    await new Promise((resolve) => server.listen(0, resolve));
+    baseUrl = `http://localhost:${server.address().port}`;
+
+    tempDir = createTempRepo();
+
+    const res = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'archive-test', cwd: tempDir }),
+    });
+    const proj = await res.json();
+    projectId = proj.id;
+  });
+
+  after(async () => {
+    await server.destroy();
+    fs.rmSync(tempDir, { recursive: true, force: true });
+  });
 
   it('POST /api/sessions/:id/archive removes worktree but keeps branch', async () => {
-    // Create session
     const createRes = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -897,7 +1495,6 @@ describe('Sessions API - Archive', () => {
     });
     const session = await createRes.json();
 
-    // Archive it
     const res = await fetch(`${baseUrl}/api/sessions/${session.id}/archive`, {
       method: 'POST',
     });
@@ -921,12 +1518,12 @@ describe('Sessions API - Archive', () => {
 });
 ```
 
-### Step 10: Run test to verify it fails
+### Step 15: Run test to verify it fails
 
 Run: `node --test test/server.test.js`
 Expected: FAIL - 404 (endpoint doesn't exist)
 
-### Step 11: Implement archive endpoint
+### Step 16: Implement archive endpoint
 
 Add to `server.js`:
 
@@ -944,7 +1541,7 @@ app.post('/api/sessions/:id/archive', async (req, res) => {
   // Remove worktree (keep branch)
   if (session.branchName) {
     try {
-      await removeWorktree(project.cwd, session.branchName, { deleteBranch: false });
+      await removeWorktree(project.cwd, session.branchName, project.id, { deleteBranch: false });
     } catch (err) {
       console.error(`Failed to remove worktree: ${err.message}`);
     }
@@ -970,66 +1567,109 @@ app.post('/api/sessions/:id/archive', async (req, res) => {
 });
 ```
 
-### Step 12: Run test to verify it passes
+### Step 17: Run test to verify it passes
 
 Run: `node --test test/server.test.js`
 Expected: PASS
 
-### Step 13: Write failing test for delete with dirty worktree
+### Step 18: Write failing test for delete with dirty worktree
 
 Add to `test/server.test.js`:
 
 ```javascript
-it('DELETE /api/sessions/:id returns DIRTY_WORKTREE when dirty', async () => {
-  // Create session
-  const createRes = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'dirty-session' }),
+describe('Sessions API - Delete', () => {
+  let server;
+  let baseUrl;
+  let tempDir;
+  let projectId;
+
+  before(async () => {
+    server = createServer({ testMode: true });
+    await new Promise((resolve) => server.listen(0, resolve));
+    baseUrl = `http://localhost:${server.address().port}`;
+
+    tempDir = createTempRepo();
+
+    const res = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'delete-test', cwd: tempDir }),
+    });
+    const proj = await res.json();
+    projectId = proj.id;
   });
-  const session = await createRes.json();
 
-  // Make it dirty
-  const fullWorktreePath = path.join(tempDir, session.worktreePath);
-  fs.writeFileSync(path.join(fullWorktreePath, 'dirty.txt'), 'uncommitted');
-
-  // Try to delete
-  const res = await fetch(`${baseUrl}/api/sessions/${session.id}`, { method: 'DELETE' });
-  assert.strictEqual(res.status, 400);
-  const data = await res.json();
-  assert.strictEqual(data.code, 'DIRTY_WORKTREE');
-});
-
-it('DELETE /api/sessions/:id?force=true deletes dirty worktree', async () => {
-  // Create session
-  const createRes = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name: 'force-delete' }),
+  after(async () => {
+    await server.destroy();
+    fs.rmSync(tempDir, { recursive: true, force: true });
   });
-  const session = await createRes.json();
 
-  // Make it dirty
-  const fullWorktreePath = path.join(tempDir, session.worktreePath);
-  fs.writeFileSync(path.join(fullWorktreePath, 'dirty.txt'), 'uncommitted');
+  it('returns DIRTY_WORKTREE when worktree has uncommitted changes', async () => {
+    const createRes = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'dirty-session' }),
+    });
+    const session = await createRes.json();
 
-  // Force delete
-  const res = await fetch(`${baseUrl}/api/sessions/${session.id}?force=true`, { method: 'DELETE' });
-  assert.strictEqual(res.status, 200);
+    // Make it dirty
+    const fullWorktreePath = path.join(tempDir, session.worktreePath);
+    fs.writeFileSync(path.join(fullWorktreePath, 'dirty.txt'), 'uncommitted');
 
-  // Verify worktree and branch are gone
-  assert.ok(!fs.existsSync(fullWorktreePath));
-  const branches = execSync('git branch', { cwd: tempDir, encoding: 'utf-8' });
-  assert.ok(!branches.includes(`claude/${session.branchName}`));
+    // Try to delete
+    const res = await fetch(`${baseUrl}/api/sessions/${session.id}`, { method: 'DELETE' });
+    assert.strictEqual(res.status, 400);
+    const data = await res.json();
+    assert.strictEqual(data.code, 'DIRTY_WORKTREE');
+  });
+
+  it('DELETE with force=true deletes dirty worktree', async () => {
+    const createRes = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'force-delete' }),
+    });
+    const session = await createRes.json();
+
+    // Make it dirty
+    const fullWorktreePath = path.join(tempDir, session.worktreePath);
+    fs.writeFileSync(path.join(fullWorktreePath, 'dirty.txt'), 'uncommitted');
+
+    // Force delete
+    const res = await fetch(`${baseUrl}/api/sessions/${session.id}?force=true`, { method: 'DELETE' });
+    assert.strictEqual(res.status, 200);
+
+    // Verify worktree and branch are gone
+    assert.ok(!fs.existsSync(fullWorktreePath));
+    const branches = execSync('git branch', { cwd: tempDir, encoding: 'utf-8' });
+    assert.ok(!branches.includes(`claude/${session.branchName}`));
+  });
+
+  it('proceeds with delete when dirty check fails (worktree missing)', async () => {
+    const createRes = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'missing-worktree' }),
+    });
+    const session = await createRes.json();
+
+    // Manually remove worktree
+    const fullWorktreePath = path.join(tempDir, session.worktreePath);
+    execSync(`git worktree remove --force "${fullWorktreePath}"`, { cwd: tempDir });
+
+    // Delete should still succeed (can't check dirty on missing worktree)
+    const res = await fetch(`${baseUrl}/api/sessions/${session.id}`, { method: 'DELETE' });
+    assert.strictEqual(res.status, 200);
+  });
 });
 ```
 
-### Step 14: Run test to verify it fails
+### Step 19: Run test to verify it fails
 
 Run: `node --test test/server.test.js`
 Expected: FAIL - dirty check not implemented
 
-### Step 15: Update DELETE endpoint with dirty check
+### Step 20: Update DELETE endpoint with dirty check
 
 Update `DELETE /api/sessions/:id` in `server.js`:
 
@@ -1052,8 +1692,12 @@ app.delete('/api/sessions/:id', async (req, res) => {
           code: 'DIRTY_WORKTREE',
         });
       }
-    } catch {
-      // Worktree might not exist, proceed with delete
+    } catch (err) {
+      // WorktreeDirtyCheckError means we can't check - proceed with delete
+      // (worktree might be corrupted or missing)
+      if (!(err instanceof WorktreeDirtyCheckError)) {
+        throw err;
+      }
     }
   }
 
@@ -1063,7 +1707,7 @@ app.delete('/api/sessions/:id', async (req, res) => {
   // Remove worktree and branch
   if (session.branchName && project) {
     try {
-      await removeWorktree(project.cwd, session.branchName, { deleteBranch: true });
+      await removeWorktree(project.cwd, session.branchName, project.id, { deleteBranch: true });
     } catch (err) {
       console.error(`Failed to remove worktree: ${err.message}`);
     }
@@ -1083,34 +1727,12 @@ app.delete('/api/sessions/:id', async (req, res) => {
 });
 ```
 
-### Step 16: Run test to verify it passes
-
-Run: `node --test test/server.test.js`
-Expected: PASS
-
-### Step 17: Update restart to check worktree exists
-
-Update `POST /api/sessions/:id/restart`:
-
-```javascript
-// At start of handler, after finding session:
-if (session.branchName) {
-  const exists = await worktreeExists(project.cwd, session.branchName);
-  if (!exists) {
-    return res.status(400).json({
-      error: 'Worktree was removed. Delete this session and create a new one.',
-      code: 'WORKTREE_MISSING',
-    });
-  }
-}
-```
-
-### Step 18: Run all server tests
+### Step 21: Run all server tests
 
 Run: `node --test test/server.test.js`
 Expected: All PASS
 
-### Step 19: Commit
+### Step 22: Commit
 
 ```bash
 git add server.js test/server.test.js
@@ -1119,9 +1741,12 @@ feat: integrate worktree support into server
 
 - Validate git repo at project creation (reject bare/empty)
 - Create worktree and branch on session creation
+- Use session UUID for branch suffix (deterministic)
 - Add POST /api/sessions/:id/archive endpoint
+- Check worktree exists on restart (return WORKTREE_MISSING)
 - Check for dirty worktree on delete (require force=true)
-- Check worktree exists on restart
+- Handle WorktreeDirtyCheckError gracefully on delete
+- Clean up worktree on spawn failure
 EOF
 )"
 ```
@@ -1130,436 +1755,7 @@ EOF
 
 ## Task 3: Update Frontend for Worktree UI
 
-**Files:**
-- Modify: `public/app.js`
-- Modify: `public/style.css`
-- Modify: `public/index.html`
-
-### Step 1: Add tooltip styles
-
-Add to `public/style.css`:
-
-```css
-/* --- Session tooltip --- */
-.session-item {
-  position: relative;
-}
-
-.session-tooltip {
-  display: none;
-  position: absolute;
-  left: 100%;
-  top: 0;
-  margin-left: 8px;
-  background: #0f3460;
-  border: 1px solid #1a1a2e;
-  border-radius: 4px;
-  padding: 8px 12px;
-  font-size: 11px;
-  white-space: nowrap;
-  z-index: 100;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-}
-
-.session-item:hover .session-tooltip {
-  display: block;
-}
-
-.tooltip-label {
-  color: #6b7280;
-  margin-right: 4px;
-}
-
-.tooltip-value {
-  color: #e0e0e0;
-  font-family: monospace;
-}
-
-.tooltip-row {
-  margin-bottom: 4px;
-}
-
-.tooltip-row:last-child {
-  margin-bottom: 0;
-}
-```
-
-### Step 2: Add archive button styles
-
-Add to `public/style.css`:
-
-```css
-/* --- Session actions --- */
-.session-actions {
-  display: flex;
-  gap: 4px;
-  opacity: 0;
-  transition: opacity 0.15s;
-}
-
-.session-item:hover .session-actions {
-  opacity: 1;
-}
-
-.session-archive {
-  background: none;
-  border: none;
-  color: #6b7280;
-  cursor: pointer;
-  font-size: 11px;
-  padding: 2px 4px;
-}
-
-.session-archive:hover {
-  color: #dcdcaa;
-}
-```
-
-### Step 3: Add toast styles
-
-Add to `public/style.css`:
-
-```css
-/* --- Toast notifications --- */
-#toast-container {
-  position: fixed;
-  bottom: 20px;
-  right: 20px;
-  z-index: 1000;
-}
-
-.toast {
-  background: #0f3460;
-  color: #e0e0e0;
-  padding: 12px 16px;
-  border-radius: 4px;
-  margin-top: 8px;
-  font-size: 13px;
-  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
-  animation: toast-in 0.3s ease;
-}
-
-.toast.warning {
-  border-left: 3px solid #dcdcaa;
-}
-
-@keyframes toast-in {
-  from { opacity: 0; transform: translateY(10px); }
-  to { opacity: 1; transform: translateY(0); }
-}
-```
-
-### Step 4: Add delete confirmation modal
-
-Add to `public/index.html` (before closing `</body>`):
-
-```html
-<!-- Delete Confirmation Modal -->
-<div id="delete-modal" class="hidden">
-  <div id="delete-modal-content">
-    <p>This session has uncommitted changes that will be lost. Delete anyway?</p>
-    <div class="modal-buttons">
-      <button id="btn-delete-cancel">Cancel</button>
-      <button id="btn-delete-confirm" class="danger">Delete</button>
-    </div>
-  </div>
-</div>
-
-<!-- Toast Container -->
-<div id="toast-container"></div>
-```
-
-### Step 5: Add delete modal styles
-
-Add to `public/style.css`:
-
-```css
-/* --- Delete confirmation modal --- */
-#delete-modal {
-  position: fixed;
-  inset: 0;
-  background: rgba(0,0,0,0.6);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  z-index: 200;
-}
-
-#delete-modal.hidden {
-  display: none;
-}
-
-#delete-modal-content {
-  background: #16213e;
-  border: 1px solid #0f3460;
-  border-radius: 8px;
-  padding: 20px;
-  max-width: 400px;
-}
-
-#delete-modal-content p {
-  margin-bottom: 16px;
-}
-
-.danger {
-  background: #f44747 !important;
-}
-
-.danger:hover {
-  background: #d43d3d !important;
-}
-```
-
-### Step 6: Update renderSidebar to show tooltip and archive button
-
-In `public/app.js`, update the session rendering in `renderSidebar()`:
-
-```javascript
-for (const s of projSessions) {
-  const li = document.createElement('li');
-  li.className = 'session-item';
-  if (s.id === activeSessionId) li.classList.add('active');
-
-  const dot = document.createElement('span');
-  dot.className = 'status-dot';
-  dot.classList.add(s.alive ? 'alive' : 'exited');
-
-  const sName = document.createElement('span');
-  sName.className = 'session-name';
-  sName.textContent = s.name;
-
-  const time = document.createElement('span');
-  time.className = 'session-time';
-  time.textContent = relativeTime(s.createdAt);
-
-  // Session actions (archive + delete)
-  const actions = document.createElement('div');
-  actions.className = 'session-actions';
-
-  const sArchive = document.createElement('button');
-  sArchive.className = 'session-archive';
-  sArchive.textContent = 'Archive';
-  sArchive.title = 'Archive session (keep branch)';
-  sArchive.onclick = (e) => {
-    e.stopPropagation();
-    archiveSession(s.id);
-  };
-
-  const sDel = document.createElement('button');
-  sDel.className = 'session-delete';
-  sDel.textContent = '\u00D7';
-  sDel.title = 'Delete session';
-  sDel.onclick = (e) => {
-    e.stopPropagation();
-    deleteSession(s.id);
-  };
-
-  actions.appendChild(sArchive);
-  actions.appendChild(sDel);
-
-  // Tooltip (only if branchName exists)
-  if (s.branchName) {
-    const tooltip = document.createElement('div');
-    tooltip.className = 'session-tooltip';
-    tooltip.innerHTML = `
-      <div class="tooltip-row">
-        <span class="tooltip-label">Branch:</span>
-        <span class="tooltip-value">claude/${s.branchName}</span>
-      </div>
-      <div class="tooltip-row">
-        <span class="tooltip-label">Path:</span>
-        <span class="tooltip-value">${s.worktreePath}</span>
-      </div>
-    `;
-    li.appendChild(tooltip);
-  }
-
-  li.appendChild(dot);
-  li.appendChild(sName);
-  li.appendChild(time);
-  li.appendChild(actions);
-
-  li.onclick = () => {
-    if (!s.alive && s.claudeSessionId) {
-      restartSession(s.id);
-    }
-    attachSession(s.id);
-  };
-
-  ul.appendChild(li);
-}
-```
-
-### Step 7: Add archiveSession function
-
-Add to `public/app.js`:
-
-```javascript
-async function archiveSession(id) {
-  const res = await fetch(`/api/sessions/${id}/archive`, { method: 'POST' });
-  if (!res.ok) {
-    const err = await res.json();
-    showToast(err.error || 'Failed to archive session', 'error');
-    return;
-  }
-  const data = await res.json();
-  if (data.branch) {
-    showToast(`Archived. Branch ${data.branch} preserved.`, 'info');
-  }
-  if (activeSessionId === id) {
-    activeSessionId = null;
-    term.reset();
-    noSession.classList.remove('hidden');
-  }
-}
-```
-
-### Step 8: Update deleteSession with dirty confirmation
-
-Update `deleteSession` in `public/app.js`:
-
-```javascript
-async function deleteSession(id, force = false) {
-  const url = force ? `/api/sessions/${id}?force=true` : `/api/sessions/${id}`;
-  const res = await fetch(url, { method: 'DELETE' });
-
-  if (!res.ok) {
-    const err = await res.json();
-    if (err.code === 'DIRTY_WORKTREE') {
-      // Show confirmation modal
-      showDeleteConfirmation(id);
-      return;
-    }
-    showToast(err.error || 'Failed to delete session', 'error');
-    return;
-  }
-
-  if (activeSessionId === id) {
-    activeSessionId = null;
-    term.reset();
-    noSession.classList.remove('hidden');
-  }
-}
-
-let pendingDeleteId = null;
-
-function showDeleteConfirmation(id) {
-  pendingDeleteId = id;
-  document.getElementById('delete-modal').classList.remove('hidden');
-}
-
-// Add event listeners for delete modal
-document.getElementById('btn-delete-cancel').onclick = () => {
-  pendingDeleteId = null;
-  document.getElementById('delete-modal').classList.add('hidden');
-};
-
-document.getElementById('btn-delete-confirm').onclick = () => {
-  if (pendingDeleteId) {
-    deleteSession(pendingDeleteId, true);
-  }
-  pendingDeleteId = null;
-  document.getElementById('delete-modal').classList.add('hidden');
-};
-```
-
-### Step 9: Add toast function
-
-Add to `public/app.js`:
-
-```javascript
-function showToast(message, type = 'info') {
-  const container = document.getElementById('toast-container');
-  const toast = document.createElement('div');
-  toast.className = `toast ${type}`;
-  toast.textContent = message;
-  container.appendChild(toast);
-  setTimeout(() => toast.remove(), 5000);
-}
-```
-
-### Step 10: Handle gitignore warning from session creation
-
-Update `createSession` in `public/app.js`:
-
-```javascript
-async function createSession(projectId, name) {
-  const res = await fetch(`/api/projects/${projectId}/sessions`, {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name }),
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    // Show error inline...
-    return null;
-  }
-  const session = await res.json();
-
-  // Show gitignore warning if present
-  if (session.warning) {
-    showToast(session.warning, 'warning');
-  }
-
-  attachSession(session.id);
-  return session;
-}
-```
-
-### Step 11: Update project creation error handling
-
-Update `createProject` in `public/app.js`:
-
-```javascript
-async function createProject(name, cwd) {
-  const res = await fetch('/api/projects', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ name, cwd }),
-  });
-  if (!res.ok) {
-    const err = await res.json();
-    // Show specific messages for git errors
-    let message = err.error || 'Failed to create project';
-    if (err.code === 'NOT_GIT_REPO') {
-      message = 'Not a git repository. Run `git init` first.';
-    } else if (err.code === 'BARE_REPO') {
-      message = 'Bare repositories are not supported.';
-    } else if (err.code === 'EMPTY_REPO') {
-      message = 'Repository has no commits. Make an initial commit first.';
-    }
-    alert(message);
-    return null;
-  }
-  return await res.json();
-}
-```
-
-### Step 12: Test UI manually
-
-Run: `npm start`
-- Create project with non-git dir → error shown
-- Create session → worktree created, tooltip shows branch
-- Hover session → tooltip visible
-- Archive session → worktree removed, branch kept, toast shown
-- Delete dirty session → confirmation modal
-- Force delete → session removed
-
-### Step 13: Commit
-
-```bash
-git add public/app.js public/style.css public/index.html
-git commit -m "$(cat <<'EOF'
-feat: add worktree UI to frontend
-
-- Show branch name and worktree path in session tooltip
-- Add Archive button to session actions
-- Add delete confirmation modal for dirty worktrees
-- Add toast notifications for warnings
-- Show specific error messages for git validation failures
-EOF
-)"
-```
+(Frontend steps remain the same as original plan - Steps 1-13)
 
 ---
 
@@ -1568,7 +1764,7 @@ EOF
 **Files:**
 - Modify: `test/server.test.js`
 
-### Step 1: Add full lifecycle integration test
+### Step 1: Add comprehensive integration tests
 
 Add to `test/server.test.js`:
 
@@ -1583,8 +1779,7 @@ describe('Worktree Integration - Full Lifecycle', () => {
     await new Promise((resolve) => server.listen(0, resolve));
     baseUrl = `http://localhost:${server.address().port}`;
 
-    tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'lifecycle-'));
-    execSync('git init && git commit --allow-empty -m "init"', { cwd: tempDir });
+    tempDir = createTempRepo();
   });
 
   after(async () => {
@@ -1644,6 +1839,38 @@ describe('Worktree Integration - Full Lifecycle', () => {
     const { sessions } = await listRes.json();
     assert.ok(!sessions.find(s => s.id === session.id));
   });
+
+  it('delete removes both worktree and branch', async () => {
+    // Create project
+    const projRes = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'delete-lifecycle', cwd: tempDir }),
+    });
+    const project = await projRes.json();
+
+    // Create session
+    const sessRes = await fetch(`${baseUrl}/api/projects/${project.id}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Delete Test' }),
+    });
+    const session = await sessRes.json();
+    const worktreePath = path.join(tempDir, session.worktreePath);
+
+    // Delete session
+    const deleteRes = await fetch(`${baseUrl}/api/sessions/${session.id}`, {
+      method: 'DELETE',
+    });
+    assert.strictEqual(deleteRes.status, 200);
+
+    // Verify worktree is gone
+    assert.ok(!fs.existsSync(worktreePath));
+
+    // Verify branch is also gone
+    const branches = execSync('git branch', { cwd: tempDir, encoding: 'utf-8' });
+    assert.ok(!branches.includes(`claude/${session.branchName}`));
+  });
 });
 ```
 
@@ -1656,134 +1883,34 @@ Expected: All PASS
 
 ```bash
 git add test/server.test.js
-git commit -m "test: add worktree integration lifecycle test"
+git commit -m "test: add comprehensive worktree integration tests"
 ```
 
 ---
 
 ## Task 5: Create Documentation
 
-**Files:**
-- Modify: `CLAUDE.md`
-- Create: `docs/worktrees.md`
-
-### Step 1: Update CLAUDE.md
-
-Add to CLAUDE.md under "## Gotchas":
-
-```markdown
-- Git worktrees: Projects must be git repositories (not bare, with at least one commit). Each session creates a worktree at `.worktrees/<branch-name>`. Add `.worktrees/` to your `.gitignore`.
-```
-
-### Step 2: Create docs/worktrees.md
-
-```markdown
-# Git Worktree Integration
-
-Claude Console uses git worktrees to isolate sessions. Each session runs in its own worktree with its own branch.
-
-## How It Works
-
-When you create a session:
-1. A new branch `claude/<session-name>-<id>` is created from current HEAD
-2. A worktree is checked out at `.worktrees/<session-name>-<id>`
-3. Claude runs in the worktree directory
-
-This means multiple sessions can work on the same codebase without conflicts.
-
-## Requirements
-
-- Project directory must be a git repository
-- Repository must have at least one commit
-- Bare repositories are not supported
-
-## Recommendations
-
-Add `.worktrees/` to your `.gitignore`:
-
-```
-echo ".worktrees/" >> .gitignore
-```
-
-## Session Lifecycle
-
-| Action | Worktree | Branch | Data |
-|--------|----------|--------|------|
-| Create | Created | Created | Stored |
-| Restart | Reused | Unchanged | Unchanged |
-| Archive | Removed | **Kept** | Removed |
-| Delete | Removed | Removed | Removed |
-
-### Archive vs Delete
-
-- **Archive**: Removes the worktree but keeps the branch. Use this when you might want to recover the code later.
-- **Delete**: Removes both worktree and branch. Use this for complete cleanup.
-
-If a session has uncommitted changes, delete will prompt for confirmation.
-
-## Recovering Archived Branches
-
-After archiving, the branch remains in git:
-
-```bash
-# List Claude branches
-git branch | grep claude/
-
-# Checkout an archived branch
-git checkout claude/fix-auth-bug-a1b2c3d
-
-# Or create a new worktree from it
-git worktree add ../recovered-work claude/fix-auth-bug-a1b2c3d
-```
-
-## Cleaning Up Old Branches
-
-```bash
-# Delete all claude branches
-git branch | grep claude/ | xargs git branch -D
-```
-
-## Troubleshooting
-
-### "Worktree was removed" error on restart
-
-The worktree directory was deleted manually. Delete the session and create a new one.
-
-### "Directory is not a git repository"
-
-Initialize git in the project directory:
-
-```bash
-cd /path/to/project
-git init
-git commit --allow-empty -m "Initial commit"
-```
-
-### Session creation fails
-
-Check git status in the project directory. Common issues:
-- Corrupted git state
-- Disk full
-- Permission issues
-```
-
-### Step 3: Commit
-
-```bash
-git add CLAUDE.md docs/worktrees.md
-git commit -m "docs: add worktree documentation"
-```
+(Documentation steps remain the same as original plan - Steps 1-3)
 
 ---
 
-## Summary
+## Summary of Changes from v1
 
-| Task | Files | Status |
-|------|-------|--------|
-| 1. git-worktree.js module | `git-worktree.js`, `test/git-worktree.test.js` | Ready |
-| 2. Server integration | `server.js`, `test/server.test.js` | Ready |
-| 3. Frontend UI | `public/app.js`, `public/style.css`, `public/index.html` | Ready |
-| 4. Integration tests | `test/server.test.js` | Ready |
-| 5. Documentation | `CLAUDE.md`, `docs/worktrees.md` | Ready |
+| Issue | Resolution |
+|-------|------------|
+| Missing per-project mutex | Added `acquireProjectLock()` with 30s timeout |
+| Path safety incomplete | Added `validateWorktreesDir()`, use `path.sep` suffix |
+| Error code mismatch | `validateBranchName()` returns `code: 'INVALID_BRANCH_NAME'` |
+| sanitizeBranchName accent handling | Use `normalize('NFD')` to strip combining marks |
+| isWorktreeDirty returns false on error | Throws `WorktreeDirtyCheckError` |
+| worktreeExists only checks filesystem | Uses `git worktree list --porcelain` |
+| Tests lack git user config | Added `gitEnv` with GIT_AUTHOR/COMMITTER vars |
+| git check-ignore pattern | Check both `.worktrees` and `.worktrees/` |
+| Branch suffix random UUID | Use session UUID (first 7 chars) |
+| Missing test: concurrent ops | Added concurrency test |
+| Missing test: restart missing | Added WORKTREE_MISSING test |
+| Missing test: invalid branch | Added INVALID_BRANCH_NAME test |
+| Missing test: symlink .worktrees | Added symlink security test |
+| Missing test: dirty check failure | Added WorktreeDirtyCheckError handling test |
 
 **Total commits:** 6
