@@ -528,3 +528,96 @@ export async function listProjectWorktrees(projectDir) {
 
   return worktrees;
 }
+
+const GRACE_PERIOD_MS = 10 * 60 * 1000; // 10 minutes
+
+/**
+ * Remove orphaned worktrees across all projects.
+ * An orphan is a git-registered worktree under .worktrees/ with no matching session.
+ *
+ * @param {object} store - Store instance with getProjects() and getSessionWorktreePaths()
+ * @param {object} [options]
+ * @param {number} [options.gracePeriodMs=600000] - Skip worktrees younger than this (ms)
+ * @returns {Promise<{removed: number, skippedDirty: number, skippedGrace: number, errors: number}>}
+ */
+export async function cleanupOrphanedWorktrees(store, { gracePeriodMs = GRACE_PERIOD_MS } = {}) {
+  const result = { removed: 0, skippedDirty: 0, skippedGrace: 0, errors: 0 };
+
+  const projects = store.getProjects();
+
+  for (const project of projects) {
+    // Verify project directory still exists
+    try {
+      const stat = await fs.promises.stat(project.cwd);
+      if (!stat.isDirectory()) continue;
+    } catch {
+      continue;
+    }
+
+    // Get all registered worktrees under .worktrees/
+    const worktrees = await listProjectWorktrees(project.cwd);
+    if (worktrees.length === 0) continue;
+
+    // Get all session worktree paths for this project
+    const sessionPaths = new Set(store.getSessionWorktreePaths(project.id));
+
+    for (const worktree of worktrees) {
+      // Check if this worktree has a matching session
+      if (sessionPaths.has(worktree.relativePath)) continue;
+
+      // Grace period: skip if worktree directory is too new
+      if (gracePeriodMs > 0) {
+        try {
+          const stat = await fs.promises.stat(worktree.absolutePath);
+          const ageMs = Date.now() - stat.birthtimeMs;
+          if (ageMs < gracePeriodMs) {
+            result.skippedGrace++;
+            console.log(`[cleanup] Skipping young orphan (${Math.round(ageMs / 1000)}s old): ${worktree.relativePath}`);
+            continue;
+          }
+        } catch {
+          // If we can't stat it, proceed with removal attempt
+        }
+      }
+
+      // Check if dirty
+      const branchName = path.basename(worktree.relativePath);
+      try {
+        const dirty = await isWorktreeDirty(project.cwd, branchName);
+        if (dirty) {
+          result.skippedDirty++;
+          console.log(`[cleanup] Skipping dirty orphan: ${worktree.relativePath}`);
+          continue;
+        }
+      } catch (e) {
+        if (e instanceof WorktreeDirtyCheckError && e.code === 'WORKTREE_MISSING') {
+          // Worktree directory gone but still registered — proceed to prune
+        } else {
+          result.errors++;
+          console.error(`[cleanup] Error checking dirty status for ${worktree.relativePath}: ${e.message}`);
+          continue;
+        }
+      }
+
+      // Remove the orphan worktree (never delete branch)
+      try {
+        await removeWorktree(project.cwd, branchName, project.id, { deleteBranch: false });
+        result.removed++;
+        console.log(`[cleanup] Removed orphan worktree: ${worktree.relativePath}`);
+      } catch (e) {
+        result.errors++;
+        console.error(`[cleanup] Failed to remove ${worktree.relativePath}: ${e.message}`);
+      }
+    }
+
+    // Prune stale git worktree refs
+    try {
+      await execFileAsync('git', ['worktree', 'prune'], { cwd: project.cwd });
+    } catch {
+      // Best-effort
+    }
+  }
+
+  console.log(`[cleanup] Complete: removed=${result.removed}, skippedDirty=${result.skippedDirty}, skippedGrace=${result.skippedGrace}, errors=${result.errors}`);
+  return result;
+}
