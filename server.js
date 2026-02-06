@@ -8,7 +8,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { PtyManager } from './pty-manager.js';
-import { load, save } from './store.js';
+import { createStore } from './store.js';
 import {
   validateGitRepo,
   validateWorktreesDir,
@@ -34,7 +34,7 @@ export function createServer({ testMode = false } = {}) {
   const manager = new PtyManager();
 
   // In test mode, use bash instead of claude; don't persist
-  let data = testMode ? { projects: [], sessions: [] } : load();
+  const store = testMode ? createStore(':memory:') : createStore();
   const clients = new Set();
 
   app.use(express.json({ limit: '16kb' }));
@@ -89,10 +89,6 @@ export function createServer({ testMode = false } = {}) {
 
   // --- Helpers ---
 
-  function persist() {
-    if (!testMode) save(data);
-  }
-
   function safeSend(ws, msg) {
     if (ws.readyState === 1) {
       try {
@@ -104,10 +100,11 @@ export function createServer({ testMode = false } = {}) {
   }
 
   function broadcastState() {
+    const { projects, sessions } = store.getAll();
     const msg = JSON.stringify({
       type: 'state',
-      projects: data.projects,
-      sessions: data.sessions.map((s) => ({
+      projects,
+      sessions: sessions.map((s) => ({
         ...s,
         alive: manager.isAlive(s.id),
       })),
@@ -118,10 +115,9 @@ export function createServer({ testMode = false } = {}) {
   }
 
   async function spawnSession(session) {
-    const project = data.projects.find((p) => p.id === session.projectId);
+    const project = store.getProject(session.projectId);
     if (!project) throw new Error('Project not found for session');
 
-    // Use worktree path if available (new sessions), otherwise project cwd (backward compat)
     let cwd = project.cwd;
     if (session.worktreePath) {
       try {
@@ -145,15 +141,13 @@ export function createServer({ testMode = false } = {}) {
     try {
       manager.spawn(session.id, spawnOpts);
     } catch (e) {
-      session.status = 'exited';
-      persist();
+      store.updateSession(session.id, { status: 'exited' });
       broadcastState();
       throw e;
     }
 
     manager.onExit(session.id, () => {
-      session.status = 'exited';
-      persist();
+      store.updateSession(session.id, { status: 'exited' });
       broadcastState();
       const msg = JSON.stringify({ type: 'exited', sessionId: session.id });
       for (const ws of clients) {
@@ -161,21 +155,18 @@ export function createServer({ testMode = false } = {}) {
       }
     });
 
-    // Session ID capture (only for real claude).
     if (!testMode) {
       const uuidRegex = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/i;
       const captureListener = (d) => {
         const match = d.match(uuidRegex);
         if (match) {
-          session.claudeSessionId = match[0];
+          store.updateSession(session.id, { claudeSessionId: match[0] });
           manager.offData(session.id, captureListener);
-          persist();
           broadcastState();
         }
       };
       manager.onData(session.id, captureListener);
 
-      // Clean up captureListener if process exits before UUID is found
       manager.onExit(session.id, () => {
         manager.offData(session.id, captureListener);
       });
@@ -185,9 +176,10 @@ export function createServer({ testMode = false } = {}) {
   // --- Projects REST API ---
 
   app.get('/api/projects', (req, res) => {
+    const { projects, sessions } = store.getAll();
     res.json({
-      projects: data.projects,
-      sessions: data.sessions.map((s) => ({
+      projects,
+      sessions: sessions.map((s) => ({
         ...s,
         alive: manager.isAlive(s.id),
       })),
@@ -223,51 +215,41 @@ export function createServer({ testMode = false } = {}) {
       });
     }
 
-    const project = {
+    const project = store.createProject({
       id: crypto.randomUUID(),
       name,
       cwd: resolvedCwd,
       createdAt: new Date().toISOString(),
-    };
+    });
 
-    data.projects.push(project);
-    persist();
     broadcastState();
     res.status(201).json(project);
   });
 
   app.delete('/api/projects/:id', async (req, res) => {
-    const idx = data.projects.findIndex((p) => p.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: 'not found' });
+    const project = store.getProject(req.params.id);
+    if (!project) return res.status(404).json({ error: 'not found' });
 
-    const project = data.projects[idx];
-
-    // Kill all sessions for this project
-    const projectSessions = data.sessions.filter((s) => s.projectId === req.params.id);
+    const projectSessions = store.getSessions(req.params.id);
     for (const s of projectSessions) {
       manager.kill(s.id);
       manager.killShell(s.id);
-      // Notify attached clients
       const msg = JSON.stringify({ type: 'session-deleted', sessionId: s.id });
       for (const ws of clients) {
         safeSend(ws, msg);
       }
     }
 
-    // Clean up worktrees and branches for all sessions (best-effort)
     for (const s of projectSessions) {
       if (!s.branchName) continue;
       try {
         await removeWorktree(project.cwd, s.branchName, project.id, { deleteBranch: true });
       } catch {
-        // Best-effort cleanup - ignore errors
+        // Best-effort cleanup
       }
     }
 
-    // Remove sessions and project
-    data.sessions = data.sessions.filter((s) => s.projectId !== req.params.id);
-    data.projects.splice(idx, 1);
-    persist();
+    store.deleteProject(req.params.id);
     broadcastState();
     res.json({ ok: true });
   });
@@ -275,7 +257,7 @@ export function createServer({ testMode = false } = {}) {
   // --- Sessions REST API ---
 
   app.post('/api/projects/:id/sessions', async (req, res) => {
-    const project = data.projects.find((p) => p.id === req.params.id);
+    const project = store.getProject(req.params.id);
     if (!project) return res.status(404).json({ error: 'project not found' });
 
     const { name } = req.body;
@@ -283,7 +265,6 @@ export function createServer({ testMode = false } = {}) {
       return res.status(400).json({ error: `name is required (string, max ${MAX_NAME_LENGTH} chars)` });
     }
 
-    // Validate project cwd still exists
     try {
       const stat = fs.statSync(project.cwd);
       if (!stat.isDirectory()) throw new Error();
@@ -291,12 +272,10 @@ export function createServer({ testMode = false } = {}) {
       return res.status(400).json({ error: 'Project directory no longer exists' });
     }
 
-    // Generate session ID and branch name first
     const sessionId = crypto.randomUUID();
     const branchName = `${sanitizeBranchName(name)}-${sessionId.slice(0, 7)}`;
     const worktreePath = `.worktrees/${branchName}`;
 
-    // Create worktree
     try {
       await createWorktree(project.cwd, branchName, project.id);
     } catch (e) {
@@ -306,7 +285,6 @@ export function createServer({ testMode = false } = {}) {
       });
     }
 
-    // Check if .worktrees is in .gitignore
     let worktreeWarning = null;
     try {
       const isIgnored = await isWorktreesIgnored(project.cwd);
@@ -317,7 +295,7 @@ export function createServer({ testMode = false } = {}) {
       // Ignore check errors
     }
 
-    const session = {
+    const session = store.createSession({
       id: sessionId,
       projectId: project.id,
       name,
@@ -326,24 +304,17 @@ export function createServer({ testMode = false } = {}) {
       claudeSessionId: null,
       status: 'running',
       createdAt: new Date().toISOString(),
-    };
-
-    data.sessions.push(session);
-    persist();
+    });
 
     try {
       await spawnSession(session);
     } catch (e) {
-      // Clean up worktree on spawn failure
       try {
         await removeWorktree(project.cwd, branchName, project.id, { deleteBranch: true });
       } catch {
         // Ignore cleanup errors
       }
-      // Remove session from data
-      const idx = data.sessions.findIndex((s) => s.id === session.id);
-      if (idx !== -1) data.sessions.splice(idx, 1);
-      persist();
+      store.deleteSession(session.id);
       if (e.code === 'INVALID_WORKTREE_PATH' || e.code === 'PATH_SAFETY_VIOLATION') {
         return res.status(400).json({ error: e.message, code: e.code });
       }
@@ -359,14 +330,12 @@ export function createServer({ testMode = false } = {}) {
   });
 
   app.delete('/api/sessions/:id', async (req, res) => {
-    const idx = data.sessions.findIndex((s) => s.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: 'not found' });
+    const session = store.getSession(req.params.id);
+    if (!session) return res.status(404).json({ error: 'not found' });
 
-    const session = data.sessions[idx];
-    const project = data.projects.find((p) => p.id === session.projectId);
+    const project = store.getProject(session.projectId);
     const force = req.query.force === 'true';
 
-    // Check for dirty worktree (if session has one and not forcing)
     if (!force && session.branchName && project) {
       try {
         const dirty = await isWorktreeDirty(project.cwd, session.branchName);
@@ -378,7 +347,6 @@ export function createServer({ testMode = false } = {}) {
         }
       } catch (e) {
         if (e instanceof WorktreeDirtyCheckError) {
-          // Only proceed silently if worktree is missing - other errors should block
           if (e.code !== 'WORKTREE_MISSING') {
             return res.status(400).json({
               error: 'Cannot verify worktree status. Use force=true to delete anyway.',
@@ -394,12 +362,11 @@ export function createServer({ testMode = false } = {}) {
     manager.kill(session.id);
     manager.killShell(session.id);
 
-    // Remove worktree and branch
     if (session.branchName && project) {
       try {
         await removeWorktree(project.cwd, session.branchName, project.id, { deleteBranch: true });
       } catch {
-        // Ignore removal errors - worktree might already be gone
+        // Ignore removal errors
       }
     }
 
@@ -408,22 +375,18 @@ export function createServer({ testMode = false } = {}) {
       safeSend(ws, msg);
     }
 
-    data.sessions.splice(idx, 1);
-    persist();
+    store.deleteSession(session.id);
     broadcastState();
     res.json({ ok: true });
   });
 
-  // Archive session: remove worktree but keep branch (can recover later)
   app.post('/api/sessions/:id/archive', async (req, res) => {
-    const idx = data.sessions.findIndex((s) => s.id === req.params.id);
-    if (idx === -1) return res.status(404).json({ error: 'not found' });
+    const session = store.getSession(req.params.id);
+    if (!session) return res.status(404).json({ error: 'not found' });
 
-    const session = data.sessions[idx];
-    const project = data.projects.find((p) => p.id === session.projectId);
+    const project = store.getProject(session.projectId);
     const force = req.query.force === 'true';
 
-    // Check for dirty worktree (same as delete - archive also removes worktree)
     if (!force && session.branchName && project) {
       try {
         const dirty = await isWorktreeDirty(project.cwd, session.branchName);
@@ -452,12 +415,11 @@ export function createServer({ testMode = false } = {}) {
 
     const fullBranchName = session.branchName ? `claude/${session.branchName}` : null;
 
-    // Remove worktree but keep branch
     if (session.branchName && project) {
       try {
         await removeWorktree(project.cwd, session.branchName, project.id, { deleteBranch: false });
       } catch {
-        // Ignore removal errors - worktree might already be gone
+        // Ignore removal errors
       }
     }
 
@@ -466,8 +428,7 @@ export function createServer({ testMode = false } = {}) {
       safeSend(ws, msg);
     }
 
-    data.sessions.splice(idx, 1);
-    persist();
+    store.deleteSession(session.id);
     broadcastState();
 
     res.json({
@@ -480,13 +441,12 @@ export function createServer({ testMode = false } = {}) {
   });
 
   app.post('/api/sessions/:id/restart', async (req, res) => {
-    const session = data.sessions.find((s) => s.id === req.params.id);
+    const session = store.getSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'not found' });
 
-    const project = data.projects.find((p) => p.id === session.projectId);
+    const project = store.getProject(session.projectId);
     if (!project) return res.status(400).json({ error: 'Parent project not found' });
 
-    // Validate cwd
     try {
       const stat = fs.statSync(project.cwd);
       if (!stat.isDirectory()) throw new Error();
@@ -494,7 +454,6 @@ export function createServer({ testMode = false } = {}) {
       return res.status(400).json({ error: 'Project directory no longer exists' });
     }
 
-    // Check worktree exists (if session has one)
     if (session.branchName) {
       const exists = await worktreeExists(project.cwd, session.branchName);
       if (!exists) {
@@ -505,15 +464,13 @@ export function createServer({ testMode = false } = {}) {
       }
     }
 
-    // Always kill — even exited processes remain in PtyManager's map and
-    // would cause spawn() to throw "Session already exists"
     manager.kill(session.id);
 
-    session.status = 'running';
-    persist();
+    store.updateSession(session.id, { status: 'running' });
+    const updatedSession = store.getSession(session.id);
 
     try {
-      await spawnSession(session);
+      await spawnSession(updatedSession);
     } catch (e) {
       if (e.code === 'INVALID_WORKTREE_PATH' || e.code === 'PATH_SAFETY_VIOLATION') {
         return res.status(400).json({ error: e.message, code: e.code });
@@ -522,7 +479,7 @@ export function createServer({ testMode = false } = {}) {
     }
 
     broadcastState();
-    res.json({ ...session, alive: true });
+    res.json({ ...store.getSession(session.id), alive: true });
   });
 
   // --- WebSocket ---
@@ -532,12 +489,13 @@ export function createServer({ testMode = false } = {}) {
     let attachedSessionId = null;
 
     // Send initial state
+    const { projects, sessions } = store.getAll();
     safeSend(
       ws,
       JSON.stringify({
         type: 'state',
-        projects: data.projects,
-        sessions: data.sessions.map((s) => ({
+        projects,
+        sessions: sessions.map((s) => ({
           ...s,
           alive: manager.isAlive(s.id),
         })),
@@ -634,11 +592,12 @@ export function createServer({ testMode = false } = {}) {
 
         case 'shell-attach': {
           const { sessionId, cols, rows } = msg;
-          const session = data.sessions.find((s) => s.id === sessionId);
-          if (!session) break;
+          console.log('[shell-attach] sessionId:', sessionId, 'cols:', cols, 'rows:', rows);
+          const session = store.getSession(sessionId);
+          if (!session) { console.log('[shell-attach] session not found'); break; }
 
-          const project = data.projects.find((p) => p.id === session.projectId);
-          if (!project) break;
+          const project = store.getProject(session.projectId);
+          if (!project) { console.log('[shell-attach] project not found'); break; }
 
           // Detach previous shell listener
           if (attachedSessionId && shellDataListener) {
@@ -652,10 +611,13 @@ export function createServer({ testMode = false } = {}) {
             if (session.worktreePath) {
               try {
                 cwd = await resolveWorktreePath(project.cwd, session.worktreePath);
-              } catch {
+                console.log('[shell-attach] resolved cwd:', cwd);
+              } catch (e) {
+                console.log('[shell-attach] resolveWorktreePath FAILED:', e.message);
                 break;
               }
             }
+            console.log('[shell-attach] spawning shell in:', cwd);
             manager.spawnShell(sessionId, { cwd, cols, rows });
           } else if (cols && rows) {
             manager.resizeShell(sessionId, cols, rows);
@@ -721,11 +683,12 @@ export function createServer({ testMode = false } = {}) {
   // --- Startup: resume running sessions ---
 
   if (!testMode) {
-    for (const session of data.sessions) {
+    const sessions = store.getAll().sessions;
+    for (const session of sessions) {
       if (session.status === 'running' && session.claudeSessionId) {
-        const project = data.projects.find((p) => p.id === session.projectId);
+        const project = store.getProject(session.projectId);
         if (!project) {
-          session.status = 'exited';
+          store.updateSession(session.id, { status: 'exited' });
           continue;
         }
         try {
@@ -733,7 +696,7 @@ export function createServer({ testMode = false } = {}) {
           if (!stat.isDirectory()) throw new Error();
         } catch {
           console.error(`Project cwd missing for ${session.name}, marking exited`);
-          session.status = 'exited';
+          store.updateSession(session.id, { status: 'exited' });
           continue;
         }
         try {
@@ -741,18 +704,17 @@ export function createServer({ testMode = false } = {}) {
           console.log(`Resumed session: ${session.name}`);
         } catch (e) {
           console.error(`Failed to resume ${session.name}: ${e.message}`);
-          session.status = 'exited';
+          store.updateSession(session.id, { status: 'exited' });
         }
       }
     }
-    persist();
   }
 
-  // Expose cleanup for testing
   server.destroy = () => {
     return new Promise((resolve) => {
       manager.destroyAll();
       manager.destroyAllShells();
+      store.close();
       wss.close();
       for (const client of clients) {
         client.terminate();
