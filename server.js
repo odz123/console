@@ -40,6 +40,99 @@ export function createServer({ testMode = false } = {}) {
   app.use(express.json({ limit: '16kb' }));
   app.use(express.static(path.join(__dirname, 'public')));
 
+  // --- Session-scoped file browser (for file tree) ---
+
+  const BROWSE_ENTRY_LIMIT = 200;
+
+  app.get('/api/browse', async (req, res, next) => {
+    const { sessionId } = req.query;
+    if (!sessionId) return next(); // fall through to original /api/browse handler
+
+    const session = store.getSession(sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    const project = store.getProject(session.projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    // Resolve worktree root
+    let worktreeRoot;
+    if (session.worktreePath) {
+      try {
+        worktreeRoot = await resolveWorktreePath(project.cwd, session.worktreePath);
+      } catch {
+        return res.status(400).json({ error: 'Invalid worktree path' });
+      }
+    } else {
+      worktreeRoot = project.cwd;
+    }
+
+    const relativePath = req.query.path || '';
+
+    // Reject absolute paths
+    if (path.isAbsolute(relativePath)) {
+      return res.status(403).json({ error: 'Absolute paths not allowed' });
+    }
+
+    // Reject path traversal
+    const normalized = path.normalize(relativePath || '.');
+    if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+      return res.status(403).json({ error: 'Path traversal not allowed' });
+    }
+
+    const resolved = relativePath ? path.resolve(worktreeRoot, normalized) : worktreeRoot;
+
+    // Symlink-safe validation
+    let realResolved, realRoot;
+    try {
+      realResolved = await fs.promises.realpath(resolved);
+      realRoot = await fs.promises.realpath(worktreeRoot);
+    } catch {
+      return res.status(400).json({ error: 'Path does not exist' });
+    }
+
+    if (realResolved !== realRoot && !realResolved.startsWith(realRoot + path.sep)) {
+      return res.status(403).json({ error: 'Path escapes worktree' });
+    }
+
+    let stat;
+    try {
+      stat = await fs.promises.stat(realResolved);
+    } catch {
+      return res.status(400).json({ error: 'Path does not exist' });
+    }
+
+    if (!stat.isDirectory()) {
+      return res.status(400).json({ error: 'Path is not a directory' });
+    }
+
+    let entries;
+    try {
+      entries = await fs.promises.readdir(realResolved, { withFileTypes: true });
+    } catch {
+      return res.status(400).json({ error: 'Cannot read directory' });
+    }
+
+    const allDirs = entries
+      .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+    const allFiles = entries
+      .filter((e) => e.isFile() && !e.name.startsWith('.'))
+      .map((e) => e.name)
+      .sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+
+    const totalEntries = allDirs.length + allFiles.length;
+    const dirs = allDirs.slice(0, BROWSE_ENTRY_LIMIT);
+    const remaining = BROWSE_ENTRY_LIMIT - dirs.length;
+    const files = allFiles.slice(0, Math.max(remaining, 0));
+    const hasMore = totalEntries > BROWSE_ENTRY_LIMIT;
+
+    const result = { dirs, files };
+    if (hasMore) result.hasMore = true;
+    res.json(result);
+  });
+
   // --- Directory Browser ---
 
   app.get('/api/browse', async (req, res) => {
