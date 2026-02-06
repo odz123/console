@@ -20,6 +20,7 @@ import {
   isWorktreeDirty,
   isWorktreesIgnored,
   WorktreeDirtyCheckError,
+  cleanupOrphanedWorktrees,
 } from './git-worktree.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -132,7 +133,7 @@ export function createServer({ testMode = false } = {}) {
     const spawnOpts = {
       cwd,
       ...(testMode
-        ? { shell: '/bin/bash', args: ['-c', 'sleep 3600'] }
+        ? { shell: '/bin/bash', args: ['-c', 'sleep 5'] }
         : session.claudeSessionId
           ? { resumeId: session.claudeSessionId }
           : {}),
@@ -440,6 +441,19 @@ export function createServer({ testMode = false } = {}) {
     });
   });
 
+  // --- Orphan Cleanup ---
+
+  app.post('/api/cleanup', async (req, res) => {
+    try {
+      const result = await cleanupOrphanedWorktrees(store, {
+        gracePeriodMs: testMode ? 0 : undefined,
+      });
+      res.json(result);
+    } catch (e) {
+      res.status(500).json({ error: `Cleanup failed: ${e.message}` });
+    }
+  });
+
   app.post('/api/sessions/:id/restart', async (req, res) => {
     const session = store.getSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'not found' });
@@ -710,8 +724,38 @@ export function createServer({ testMode = false } = {}) {
     }
   }
 
+  // --- Periodic Orphan Cleanup ---
+
+  let cleanupTimer = null;
+  let isCleanupRunning = false;
+  const CLEANUP_INTERVAL_MS = 6 * 60 * 60 * 1000; // 6 hours
+
+  async function runCleanup() {
+    if (isCleanupRunning) {
+      console.log('[cleanup] Skipping — previous cleanup still running');
+      return;
+    }
+    isCleanupRunning = true;
+    try {
+      await cleanupOrphanedWorktrees(store);
+    } catch (e) {
+      console.error(`[cleanup] Cleanup failed: ${e.message}`);
+    } finally {
+      isCleanupRunning = false;
+    }
+  }
+
+  if (!testMode) {
+    // Run cleanup on startup (async, don't block server start)
+    runCleanup();
+
+    // Schedule periodic cleanup
+    cleanupTimer = setInterval(runCleanup, CLEANUP_INTERVAL_MS);
+  }
+
   server.destroy = () => {
     return new Promise((resolve) => {
+      if (cleanupTimer) clearInterval(cleanupTimer);
       manager.destroyAll();
       manager.destroyAllShells();
       store.close();
