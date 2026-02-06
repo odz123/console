@@ -83,6 +83,9 @@ export function createStore(dbPath) {
     ),
     updateSession: db.prepare('UPDATE sessions SET status = @status, claude_session_id = @claudeSessionId WHERE id = @id'),
     deleteSession: db.prepare('DELETE FROM sessions WHERE id = ?'),
+    getSessionWorktreePaths: db.prepare(
+      'SELECT worktree_path FROM sessions WHERE project_id = ? AND worktree_path IS NOT NULL'
+    ),
   };
 
   return {
@@ -141,6 +144,10 @@ export function createStore(dbPath) {
 
     deleteSession(id) {
       stmts.deleteSession.run(id);
+    },
+
+    getSessionWorktreePaths(projectId) {
+      return stmts.getSessionWorktreePaths.all(projectId).map(row => row.worktree_path);
     },
 
     getAll() {
