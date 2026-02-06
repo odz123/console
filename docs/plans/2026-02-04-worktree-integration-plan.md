@@ -12,7 +12,71 @@
 
 **Dex Epic:** `y91ookr7`
 
-**Revision:** v2 - Addresses Codex review feedback (mutex, path safety, error codes, test gaps)
+**Revision:** v3 - Implementation complete + Codex security hardening
+
+---
+
+## Implementation Status: ✅ COMPLETE
+
+**Date:** 2026-02-05
+
+### Commits
+
+| Commit | Description |
+|--------|-------------|
+| `9fb2d5c` | feat: add git-worktree.js helper module with safety features |
+| `5b48f11` | feat: integrate git-worktree into server.js session lifecycle |
+| `f6664a1` | feat: add worktree UI support to frontend |
+| `d20f26e` | test: add full lifecycle integration tests for worktree sessions |
+| `c3fcc42` | docs: add worktree integration guide and update CLAUDE.md |
+| `b7a87fd` | fix: address Codex security review findings |
+
+### Task Progress
+
+| Task | Status | Notes |
+|------|--------|-------|
+| 1. git-worktree.js module | ✅ Complete | 35 unit tests |
+| 2. server.js integration | ✅ Complete | Session lifecycle, archive/delete |
+| 3. Frontend UI | ✅ Complete | Branch badge, archive button, toasts |
+| 4. Integration tests | ✅ Complete | Full lifecycle tests |
+| 5. Documentation | ✅ Complete | docs/worktree-guide.md |
+| 6. Security hardening | ✅ Complete | Codex review fixes |
+
+### Test Results
+
+```
+# tests 75
+# pass 75
+# fail 0
+```
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `git-worktree.js` | New (~450 lines) - Git worktree operations with security |
+| `server.js` | Modified - Session lifecycle integration |
+| `public/app.js` | Modified - UI: branch badge, archive, toasts |
+| `public/style.css` | Modified - Styling for new UI elements |
+| `test/git-worktree.test.js` | New (~400 lines) - Unit tests |
+| `test/server.test.js` | Modified - Integration tests |
+| `docs/worktree-guide.md` | New - User documentation |
+| `CLAUDE.md` | Modified - Added worktree gotcha |
+
+### Codex Security Review (Post-Implementation)
+
+After initial implementation, Codex identified 6 security/robustness issues. All fixed in commit `b7a87fd`:
+
+| Issue | Severity | Fix |
+|-------|----------|-----|
+| Path traversal via persisted worktreePath | High | Added `resolveWorktreePath()` validation in spawnSession |
+| worktreeExists prefix false positives | Medium | Parse worktree list with exact path matching |
+| removeWorktree lacked symlink check | Medium | Added `validateWorktreesDir()` call |
+| Archive silently discards uncommitted changes | Medium | Added dirty check (block unless force=true) |
+| Project delete leaves orphaned worktrees | Low | Added cleanup for all session worktrees/branches |
+| Dirty-check errors too permissive | Low | Added error codes: WORKTREE_MISSING vs DIRTY_CHECK_FAILED |
+
+**Bonus fix:** Resolved macOS symlink issue (`/var` → `/private/var`) in path containment check.
 
 ---
 
@@ -1894,7 +1958,7 @@ git commit -m "test: add comprehensive worktree integration tests"
 
 ---
 
-## Summary of Changes from v1
+## Summary of Changes from v1 (Plan Revision)
 
 | Issue | Resolution |
 |-------|------------|
@@ -1913,4 +1977,16 @@ git commit -m "test: add comprehensive worktree integration tests"
 | Missing test: symlink .worktrees | Added symlink security test |
 | Missing test: dirty check failure | Added WorktreeDirtyCheckError handling test |
 
-**Total commits:** 6
+## Summary of Changes from v2 (Post-Implementation Security Hardening)
+
+| Issue | Resolution |
+|-------|------------|
+| Path traversal in spawnSession | Added `resolveWorktreePath()` to validate persisted worktreePath |
+| worktreeExists false positives | Parse `git worktree list` by lines with exact path matching |
+| removeWorktree lacked symlink check | Added `validateWorktreesDir()` call (parity with createWorktree) |
+| Archive discards uncommitted changes | Added dirty check - blocks unless `force=true` |
+| Project delete orphans worktrees | Added worktree/branch cleanup for all sessions |
+| Dirty-check errors too permissive | Added error codes: `WORKTREE_MISSING` proceeds, `DIRTY_CHECK_FAILED` blocks |
+| macOS symlink path mismatch | Fixed `resolveWorktreePath` to use realpath consistently |
+
+**Total commits:** 6 (implementation) + 1 (security hardening) = 7
