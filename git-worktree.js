@@ -484,3 +484,47 @@ export async function isWorktreesIgnored(projectDir) {
   }
   return false;
 }
+
+/**
+ * List all registered git worktrees under .worktrees/ for a project
+ * @param {string} projectDir - Project root directory
+ * @returns {Promise<Array<{absolutePath: string, relativePath: string}>>}
+ */
+export async function listProjectWorktrees(projectDir) {
+  // Validate .worktrees directory safety
+  const dirValidation = await validateWorktreesDir(projectDir);
+  if (!dirValidation.valid) {
+    return [];
+  }
+
+  let stdout;
+  try {
+    const result = await execFileAsync(
+      'git',
+      ['worktree', 'list', '--porcelain'],
+      { cwd: projectDir }
+    );
+    stdout = result.stdout;
+  } catch {
+    return [];
+  }
+
+  const resolvedProject = await fs.promises.realpath(projectDir).catch(() => path.resolve(projectDir));
+  const worktreesDir = path.join(resolvedProject, '.worktrees');
+
+  const worktrees = [];
+  const lines = stdout.split('\n');
+  for (const line of lines) {
+    if (!line.startsWith('worktree ')) continue;
+    const absPath = line.slice('worktree '.length);
+    const resolved = await fs.promises.realpath(absPath).catch(() => path.resolve(absPath));
+
+    // Only include worktrees under .worktrees/
+    if (!resolved.startsWith(worktreesDir + path.sep)) continue;
+
+    const relativePath = path.relative(resolvedProject, resolved);
+    worktrees.push({ absolutePath: resolved, relativePath });
+  }
+
+  return worktrees;
+}

@@ -5,7 +5,7 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { sanitizeBranchName, validateGitRepo, validateWorktreesDir, createWorktree, removeWorktree, worktreeExists, isWorktreeDirty, WorktreeDirtyCheckError, isWorktreesIgnored } from '../git-worktree.js';
+import { sanitizeBranchName, validateGitRepo, validateWorktreesDir, createWorktree, removeWorktree, worktreeExists, isWorktreeDirty, WorktreeDirtyCheckError, isWorktreesIgnored, listProjectWorktrees } from '../git-worktree.js';
 
 // Set git config for CI environments
 const gitEnv = {
@@ -400,5 +400,61 @@ describe('Concurrency', () => {
     assert.ok(await worktreeExists(tempDir, 'branch-1'));
     assert.ok(await worktreeExists(tempDir, 'branch-2'));
     assert.ok(await worktreeExists(tempDir, 'branch-3'));
+  });
+});
+
+describe('listProjectWorktrees', () => {
+  let tempDir;
+
+  afterEach(() => {
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+  });
+
+  it('returns worktree paths under .worktrees/', async () => {
+    tempDir = createTempRepo();
+    fs.mkdirSync(path.join(tempDir, '.worktrees'));
+    execSync('git worktree add -b claude/branch-1 .worktrees/branch-1', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+    execSync('git worktree add -b claude/branch-2 .worktrees/branch-2', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    const worktrees = await listProjectWorktrees(tempDir);
+    const relativePaths = worktrees.map(w => w.relativePath).sort();
+    assert.deepStrictEqual(relativePaths, [
+      '.worktrees/branch-1',
+      '.worktrees/branch-2',
+    ]);
+  });
+
+  it('excludes main worktree (repo root)', async () => {
+    tempDir = createTempRepo();
+    const worktrees = await listProjectWorktrees(tempDir);
+    assert.strictEqual(worktrees.length, 0);
+  });
+
+  it('excludes worktrees outside .worktrees/', async () => {
+    tempDir = createTempRepo();
+    const otherPath = path.join(tempDir, 'other-worktree');
+    execSync(`git worktree add -b claude/other "${otherPath}"`, {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    const worktrees = await listProjectWorktrees(tempDir);
+    assert.strictEqual(worktrees.length, 0);
+  });
+
+  it('returns empty array when .worktrees dir validation fails', async () => {
+    tempDir = createTempRepo();
+    fs.writeFileSync(path.join(tempDir, '.worktrees'), 'not a directory');
+    const worktrees = await listProjectWorktrees(tempDir);
+    assert.strictEqual(worktrees.length, 0);
   });
 });
