@@ -355,6 +355,10 @@
             term.reset();
             noSession.classList.remove('hidden');
             rightPanel.classList.add('hidden');
+            tabBar.classList.remove('visible');
+            fileViewer.classList.add('hidden');
+            document.getElementById('terminal-wrapper').style.display = '';
+            document.getElementById('terminal-wrapper').style.inset = '0';
           }
           renderSidebar();
           break;
@@ -365,6 +369,10 @@
             term.reset();
             noSession.classList.remove('hidden');
             rightPanel.classList.add('hidden');
+            tabBar.classList.remove('visible');
+            fileViewer.classList.add('hidden');
+            document.getElementById('terminal-wrapper').style.display = '';
+            document.getElementById('terminal-wrapper').style.inset = '0';
           }
           break;
 
@@ -412,6 +420,13 @@
       rightPanel.classList.remove('hidden');
       rightPanelPath.textContent = session.worktreePath || '';
       rightPanelPath.title = session.worktreePath || '';
+
+      // Reset tabs and file tree for new session
+      openTabs = [];
+      activeTabId = 'claude';
+      switchTab('claude');
+      renderTabs();
+      initFileTree();
     } else {
       rightPanel.classList.add('hidden');
     }
@@ -1199,6 +1214,51 @@
       if (activeTabId !== 'claude') {
         closeTab(activeTabId);
       }
+    }
+  });
+
+  // --- Right Panel Divider Drag ---
+
+  const divider = document.getElementById('right-panel-divider');
+  const shellSection = document.getElementById('shell-section');
+
+  let isDragging = false;
+  let rafPending = false;
+
+  divider.addEventListener('mousedown', (e) => {
+    isDragging = true;
+    e.preventDefault();
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!isDragging) return;
+    if (rafPending) return; // true single-frame debounce
+
+    rafPending = true;
+    requestAnimationFrame(() => {
+      rafPending = false;
+      const panelRect = rightPanel.getBoundingClientRect();
+      const offset = e.clientY - panelRect.top;
+      const total = panelRect.height;
+      const minHeight = 100;
+
+      if (offset < minHeight || total - offset < minHeight) return;
+
+      const pct = (offset / total) * 100;
+      fileTreeSection.style.flex = `0 0 ${pct}%`;
+
+      if (shellFitAddon) shellFitAddon.fit();
+    });
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (isDragging) {
+      isDragging = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      if (shellFitAddon) shellFitAddon.fit();
     }
   });
 
