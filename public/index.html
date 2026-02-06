@@ -17,8 +17,18 @@
       <div id="project-list"></div>
     </aside>
     <main id="terminal-container">
+      <div id="tab-bar">
+        <div id="tab-list"></div>
+      </div>
       <div id="terminal-wrapper">
         <div id="terminal"></div>
+      </div>
+      <div id="file-viewer" class="hidden">
+        <div id="file-viewer-toolbar">
+          <span id="file-viewer-path"></span>
+          <button id="file-viewer-refresh" title="Refresh">Refresh</button>
+        </div>
+        <div id="file-viewer-content"></div>
       </div>
       <div id="no-session">
         <button id="btn-home-add-project" class="home-add-btn">Add Project</button>
