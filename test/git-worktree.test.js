@@ -5,7 +5,8 @@ import os from 'node:os';
 import fs from 'node:fs';
 import path from 'node:path';
 import { execSync } from 'node:child_process';
-import { sanitizeBranchName, validateGitRepo, validateWorktreesDir, createWorktree, removeWorktree, worktreeExists, isWorktreeDirty, WorktreeDirtyCheckError, isWorktreesIgnored } from '../git-worktree.js';
+import { sanitizeBranchName, validateGitRepo, validateWorktreesDir, createWorktree, removeWorktree, worktreeExists, isWorktreeDirty, WorktreeDirtyCheckError, isWorktreesIgnored, listProjectWorktrees, cleanupOrphanedWorktrees } from '../git-worktree.js';
+import { createStore } from '../store.js';
 
 // Set git config for CI environments
 const gitEnv = {
@@ -400,5 +401,242 @@ describe('Concurrency', () => {
     assert.ok(await worktreeExists(tempDir, 'branch-1'));
     assert.ok(await worktreeExists(tempDir, 'branch-2'));
     assert.ok(await worktreeExists(tempDir, 'branch-3'));
+  });
+});
+
+describe('listProjectWorktrees', () => {
+  let tempDir;
+
+  afterEach(() => {
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+  });
+
+  it('returns worktree paths under .worktrees/', async () => {
+    tempDir = createTempRepo();
+    fs.mkdirSync(path.join(tempDir, '.worktrees'));
+    execSync('git worktree add -b claude/branch-1 .worktrees/branch-1', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+    execSync('git worktree add -b claude/branch-2 .worktrees/branch-2', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    const worktrees = await listProjectWorktrees(tempDir);
+    const relativePaths = worktrees.map(w => w.relativePath).sort();
+    assert.deepStrictEqual(relativePaths, [
+      '.worktrees/branch-1',
+      '.worktrees/branch-2',
+    ]);
+  });
+
+  it('excludes main worktree (repo root)', async () => {
+    tempDir = createTempRepo();
+    const worktrees = await listProjectWorktrees(tempDir);
+    assert.strictEqual(worktrees.length, 0);
+  });
+
+  it('excludes worktrees outside .worktrees/', async () => {
+    tempDir = createTempRepo();
+    const otherPath = path.join(tempDir, 'other-worktree');
+    execSync(`git worktree add -b claude/other "${otherPath}"`, {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    const worktrees = await listProjectWorktrees(tempDir);
+    assert.strictEqual(worktrees.length, 0);
+  });
+
+  it('returns empty array when .worktrees dir validation fails', async () => {
+    tempDir = createTempRepo();
+    fs.writeFileSync(path.join(tempDir, '.worktrees'), 'not a directory');
+    const worktrees = await listProjectWorktrees(tempDir);
+    assert.strictEqual(worktrees.length, 0);
+  });
+});
+
+describe('cleanupOrphanedWorktrees', () => {
+  let tempDir;
+  let store;
+
+  afterEach(() => {
+    if (tempDir) {
+      fs.rmSync(tempDir, { recursive: true, force: true });
+      tempDir = null;
+    }
+    if (store) {
+      store.close();
+      store = null;
+    }
+  });
+
+  it('removes clean orphaned worktree with no matching session', async () => {
+    tempDir = createTempRepo();
+    store = createStore(':memory:');
+
+    store.createProject({
+      id: 'p1',
+      name: 'test',
+      cwd: tempDir,
+      createdAt: new Date().toISOString(),
+    });
+
+    fs.mkdirSync(path.join(tempDir, '.worktrees'));
+    execSync('git worktree add -b claude/orphan-branch .worktrees/orphan-branch', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    const result = await cleanupOrphanedWorktrees(store, { gracePeriodMs: 0 });
+
+    assert.strictEqual(result.removed, 1);
+    assert.strictEqual(result.skippedDirty, 0);
+    assert.ok(!fs.existsSync(path.join(tempDir, '.worktrees', 'orphan-branch')));
+
+    // Verify branch is still there (cleanup never deletes branches)
+    const branches = execSync('git branch', { cwd: tempDir, encoding: 'utf-8' });
+    assert.ok(branches.includes('claude/orphan-branch'));
+  });
+
+  it('skips dirty orphaned worktree', async () => {
+    tempDir = createTempRepo();
+    store = createStore(':memory:');
+
+    store.createProject({
+      id: 'p1',
+      name: 'test',
+      cwd: tempDir,
+      createdAt: new Date().toISOString(),
+    });
+
+    fs.mkdirSync(path.join(tempDir, '.worktrees'));
+    execSync('git worktree add -b claude/dirty-branch .worktrees/dirty-branch', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    fs.writeFileSync(
+      path.join(tempDir, '.worktrees', 'dirty-branch', 'dirty.txt'),
+      'uncommitted'
+    );
+
+    const result = await cleanupOrphanedWorktrees(store, { gracePeriodMs: 0 });
+
+    assert.strictEqual(result.removed, 0);
+    assert.strictEqual(result.skippedDirty, 1);
+    assert.ok(fs.existsSync(path.join(tempDir, '.worktrees', 'dirty-branch')));
+  });
+
+  it('does not remove worktree that has a matching session', async () => {
+    tempDir = createTempRepo();
+    store = createStore(':memory:');
+
+    store.createProject({
+      id: 'p1',
+      name: 'test',
+      cwd: tempDir,
+      createdAt: new Date().toISOString(),
+    });
+
+    fs.mkdirSync(path.join(tempDir, '.worktrees'));
+    execSync('git worktree add -b claude/active-branch .worktrees/active-branch', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    store.createSession({
+      id: 's1',
+      projectId: 'p1',
+      name: 'active',
+      branchName: 'active-branch',
+      worktreePath: '.worktrees/active-branch',
+      claudeSessionId: null,
+      status: 'running',
+      createdAt: new Date().toISOString(),
+    });
+
+    const result = await cleanupOrphanedWorktrees(store, { gracePeriodMs: 0 });
+
+    assert.strictEqual(result.removed, 0);
+    assert.strictEqual(result.skippedDirty, 0);
+    assert.ok(fs.existsSync(path.join(tempDir, '.worktrees', 'active-branch')));
+  });
+
+  it('skips worktrees within grace period (default 10 min)', async () => {
+    tempDir = createTempRepo();
+    store = createStore(':memory:');
+
+    store.createProject({
+      id: 'p1',
+      name: 'test',
+      cwd: tempDir,
+      createdAt: new Date().toISOString(),
+    });
+
+    fs.mkdirSync(path.join(tempDir, '.worktrees'));
+    execSync('git worktree add -b claude/new-branch .worktrees/new-branch', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    const result = await cleanupOrphanedWorktrees(store, { gracePeriodMs: 10 * 60 * 1000 });
+
+    assert.strictEqual(result.removed, 0);
+    assert.strictEqual(result.skippedGrace, 1);
+    assert.ok(fs.existsSync(path.join(tempDir, '.worktrees', 'new-branch')));
+  });
+
+  it('runs git worktree prune after cleanup', async () => {
+    tempDir = createTempRepo();
+    store = createStore(':memory:');
+
+    store.createProject({
+      id: 'p1',
+      name: 'test',
+      cwd: tempDir,
+      createdAt: new Date().toISOString(),
+    });
+
+    const result = await cleanupOrphanedWorktrees(store, { gracePeriodMs: 0 });
+    assert.strictEqual(result.removed, 0);
+    assert.strictEqual(result.errors, 0);
+  });
+
+  it('continues cleanup when individual orphan removal fails', async () => {
+    tempDir = createTempRepo();
+    store = createStore(':memory:');
+
+    store.createProject({
+      id: 'p1',
+      name: 'test',
+      cwd: tempDir,
+      createdAt: new Date().toISOString(),
+    });
+
+    fs.mkdirSync(path.join(tempDir, '.worktrees'));
+    execSync('git worktree add -b claude/orphan-1 .worktrees/orphan-1', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+    execSync('git worktree add -b claude/orphan-2 .worktrees/orphan-2', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    // Break orphan-1: make its .git file point nowhere
+    fs.writeFileSync(
+      path.join(tempDir, '.worktrees', 'orphan-1', '.git'),
+      'gitdir: /nonexistent/path'
+    );
+
+    const result = await cleanupOrphanedWorktrees(store, { gracePeriodMs: 0 });
+
+    assert.strictEqual(result.errors >= 1, true, 'should have at least 1 error');
+    assert.strictEqual(result.removed >= 1, true, 'should have removed at least 1 orphan');
   });
 });

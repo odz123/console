@@ -201,3 +201,59 @@ describe('Store: session CRUD', () => {
     assert.strictEqual(session.status, 'running');
   });
 });
+
+describe('store.getSessionWorktreePaths', () => {
+  it('returns worktree paths for sessions with worktreePath set', () => {
+    const store = createStore(':memory:');
+
+    store.createProject({
+      id: 'p1',
+      name: 'test-project',
+      cwd: '/tmp/repo',
+      createdAt: new Date().toISOString(),
+    });
+
+    store.createSession({
+      id: 's1',
+      projectId: 'p1',
+      name: 'session-1',
+      branchName: 'fix-bug-abc1234',
+      worktreePath: '.worktrees/fix-bug-abc1234',
+      claudeSessionId: null,
+      status: 'running',
+      createdAt: new Date().toISOString(),
+    });
+
+    store.createSession({
+      id: 's2',
+      projectId: 'p1',
+      name: 'session-2',
+      branchName: null,
+      worktreePath: null,
+      claudeSessionId: null,
+      status: 'running',
+      createdAt: new Date().toISOString(),
+    });
+
+    const paths = store.getSessionWorktreePaths('p1');
+    assert.deepStrictEqual(paths, ['.worktrees/fix-bug-abc1234']);
+
+    store.close();
+  });
+
+  it('returns empty array when no sessions have worktree paths', () => {
+    const store = createStore(':memory:');
+
+    store.createProject({
+      id: 'p1',
+      name: 'test-project',
+      cwd: '/tmp/repo',
+      createdAt: new Date().toISOString(),
+    });
+
+    const paths = store.getSessionWorktreePaths('p1');
+    assert.deepStrictEqual(paths, []);
+
+    store.close();
+  });
+});

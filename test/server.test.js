@@ -598,6 +598,55 @@ describe('Worktree Integration - Full Lifecycle', () => {
   });
 });
 
+describe('Worktree Orphan Cleanup Integration', () => {
+  let server;
+  let baseUrl;
+  let tempDir;
+
+  before(async () => {
+    server = createServer({ testMode: true });
+    await new Promise((resolve) => server.listen(0, resolve));
+    baseUrl = `http://localhost:${server.address().port}`;
+  });
+
+  after(async () => {
+    await server.destroy();
+    if (tempDir) cleanupDir(tempDir);
+  });
+
+  it('POST /api/cleanup triggers orphan cleanup and returns result', async () => {
+    tempDir = createTempRepo();
+    const projRes = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'cleanup-test', cwd: tempDir }),
+    });
+    assert.strictEqual(projRes.status, 201);
+    const project = await projRes.json();
+
+    // Create an orphan worktree (no session in DB)
+    fs.mkdirSync(path.join(tempDir, '.worktrees'), { recursive: true });
+    execSync('git worktree add -b claude/orphan-test .worktrees/orphan-test', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    // Trigger cleanup
+    const res = await fetch(`${baseUrl}/api/cleanup`, { method: 'POST' });
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.strictEqual(typeof data.removed, 'number');
+    assert.ok(data.removed >= 1, `expected at least 1 removed, got ${data.removed}`);
+
+    // Verify orphan worktree is gone
+    assert.ok(!fs.existsSync(path.join(tempDir, '.worktrees', 'orphan-test')));
+
+    // Verify branch still exists (cleanup preserves branches)
+    const branches = execSync('git branch', { cwd: tempDir, encoding: 'utf-8' });
+    assert.ok(branches.includes('claude/orphan-test'));
+  });
+});
+
 describe('Shell WebSocket', () => {
   let server;
   let baseUrl;
@@ -663,7 +712,7 @@ describe('Shell WebSocket', () => {
         if (msg.type === 'shell-replay-done') resolve();
       });
       // Timeout safety
-      setTimeout(resolve, 3000);
+      setTimeout(resolve, 1000);
     });
 
     const replayDone = messages.find((m) => m.type === 'shell-replay-done');
@@ -694,7 +743,7 @@ describe('Shell WebSocket', () => {
         const msg = JSON.parse(raw.toString());
         if (msg.type === 'shell-replay-done') resolve();
       });
-      setTimeout(resolve, 3000);
+      setTimeout(resolve, 1000);
     });
 
     // Send input
@@ -718,7 +767,7 @@ describe('Shell WebSocket', () => {
         }
       };
       ws.on('message', handler);
-      setTimeout(resolve, 3000);
+      setTimeout(resolve, 1000);
     });
 
     const combined = output.join('');

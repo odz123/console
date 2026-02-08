@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "start": "node server.js",
-    "test": "node --test 'test/*.test.js'",
+    "test": "node --test --test-timeout=30000 --test-force-exit 'test/*.test.js'",
     "test:smoke": "node test/smoke-test.mjs",
     "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true"
   },
