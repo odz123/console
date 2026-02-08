@@ -750,6 +750,7 @@ export function createServer({ testMode = false } = {}) {
     // Track the current data listener so we can remove it on detach
     let dataListener = null;
     let shellDataListener = null;
+    let attachedShellSessionId = null;
 
     ws.on('message', async (raw) => {
       let msg;
@@ -844,11 +845,13 @@ export function createServer({ testMode = false } = {}) {
           const project = store.getProject(session.projectId);
           if (!project) { console.log('[shell-attach] project not found'); break; }
 
-          // Detach previous shell listener
-          if (attachedSessionId && shellDataListener) {
-            manager.offShellData(attachedSessionId, shellDataListener);
+          // Detach previous shell listener (use dedicated tracking variable
+          // since attachedSessionId may already point to the new session)
+          if (attachedShellSessionId && shellDataListener) {
+            manager.offShellData(attachedShellSessionId, shellDataListener);
             shellDataListener = null;
           }
+          attachedShellSessionId = sessionId;
 
           // Spawn shell if not already running
           if (!manager.isShellAlive(sessionId)) {
@@ -919,8 +922,8 @@ export function createServer({ testMode = false } = {}) {
       if (attachedSessionId && dataListener) {
         manager.offData(attachedSessionId, dataListener);
       }
-      if (attachedSessionId && shellDataListener) {
-        manager.offShellData(attachedSessionId, shellDataListener);
+      if (attachedShellSessionId && shellDataListener) {
+        manager.offShellData(attachedShellSessionId, shellDataListener);
       }
     });
   });
