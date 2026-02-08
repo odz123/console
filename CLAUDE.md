@@ -35,6 +35,7 @@ Run before committing:
 1. `npm test` — fix failing tests
 2. `node --check server.js && node --check pty-manager.js && node --check store.js` — fix syntax errors
 3. `npm run test:smoke` — fix UI regressions (tests layout, file tree, tabs, markdown rendering)
+4. If your change affects user-facing behavior not covered by existing tests, add an automated test (unit or smoke) and verify manually before committing
 
 ## Don't
 

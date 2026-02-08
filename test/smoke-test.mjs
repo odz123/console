@@ -175,6 +175,44 @@ try {
   const termInset = await page.$eval('#terminal-wrapper', el => el.style.inset);
   check('No 32px gap (inset correct)', termInset.startsWith('32px'), termInset);
 
+  // --- Shift+Enter sends CSI u sequence ---
+  console.log('\nSection: Shift+Enter Key Handling');
+  // Spy on WebSocket.send to capture outgoing messages
+  await page.evaluate(() => {
+    window.__wsSent = [];
+    const origSend = WebSocket.prototype.send;
+    WebSocket.prototype.send = function(data) {
+      window.__wsSent.push(data);
+      return origSend.call(this, data);
+    };
+  });
+  // Focus the terminal textarea (offscreen element, use JS focus)
+  await page.evaluate(() => document.querySelector('#terminal-wrapper .xterm-helper-textarea').focus());
+  await page.waitForTimeout(200);
+  await page.evaluate(() => { window.__wsSent = []; }); // clear any focus-related messages
+  await page.keyboard.press('Shift+Enter');
+  await page.waitForTimeout(300);
+  const shiftEnterMessages = await page.evaluate(() => window.__wsSent);
+  const inputMsgs = shiftEnterMessages
+    .map(m => { try { return JSON.parse(m); } catch { return null; } })
+    .filter(m => m && m.type === 'input');
+  check('Shift+Enter sends exactly one input message', inputMsgs.length === 1,
+    `got ${inputMsgs.length}: ${JSON.stringify(inputMsgs)}`);
+  if (inputMsgs.length > 0) {
+    check('Shift+Enter sends CSI u sequence (\\x1b[13;2u)', inputMsgs[0].data === '\x1b[13;2u',
+      `got: ${JSON.stringify(inputMsgs[0].data)}`);
+  }
+  // Verify plain Enter still sends \r
+  await page.evaluate(() => { window.__wsSent = []; });
+  await page.keyboard.press('Enter');
+  await page.waitForTimeout(300);
+  const enterMessages = await page.evaluate(() => window.__wsSent);
+  const enterInputMsgs = enterMessages
+    .map(m => { try { return JSON.parse(m); } catch { return null; } })
+    .filter(m => m && m.type === 'input');
+  check('Plain Enter sends \\r', enterInputMsgs.length === 1 && enterInputMsgs[0].data === '\r',
+    `got: ${JSON.stringify(enterInputMsgs)}`);
+
   // --- Tab Close ---
   console.log('\nSection: Tab Close');
   const tabsBefore = (await page.$$('.tab')).length;
