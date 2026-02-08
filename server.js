@@ -935,11 +935,11 @@ export function createServer({ testMode = false } = {}) {
   if (!testMode) {
     const sessions = store.getAll().sessions;
 
-    // First pass: resolve the latest Claude session ID for every active session.
+    // First pass: resolve the latest Claude session ID for every resumable session.
     // This handles: null IDs (polling failed), stale IDs (/clear created new JSONL),
-    // and deleted JSONL files (Claude CLI cleanup).
+    // deleted JSONL files, and exited sessions that can be revived.
     for (const session of sessions) {
-      if (session.status !== 'running') continue;
+      if (session.status !== 'running' && session.status !== 'exited') continue;
 
       const project = store.getProject(session.projectId);
       if (!project) continue;
@@ -976,9 +976,9 @@ export function createServer({ testMode = false } = {}) {
 
         if (jsonlFiles.length > 0) {
           const latestId = jsonlFiles[0].name.replace('.jsonl', '');
-          if (latestId !== session.claudeSessionId) {
-            store.updateSession(session.id, { claudeSessionId: latestId });
-            console.log(`[startup] Updated claude session ID for ${session.name}: ${latestId}${session.claudeSessionId ? ` (was ${session.claudeSessionId})` : ' (was null)'}`);
+          if (latestId !== session.claudeSessionId || session.status === 'exited') {
+            store.updateSession(session.id, { claudeSessionId: latestId, status: 'running' });
+            console.log(`[startup] Updated claude session ID for ${session.name}: ${latestId}${session.claudeSessionId ? ` (was ${session.claudeSessionId})` : ' (was null)'}${session.status === 'exited' ? ' (revived)' : ''}`);
           }
         } else {
           console.warn(`[startup] No JSONL files found for ${session.name}, marking exited`);
