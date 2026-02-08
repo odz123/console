@@ -935,9 +935,11 @@ export function createServer({ testMode = false } = {}) {
   if (!testMode) {
     const sessions = store.getAll().sessions;
 
-    // First pass: recover missing claudeSessionId by scanning ~/.claude/projects/
+    // First pass: resolve the latest Claude session ID for every active session.
+    // This handles: null IDs (polling failed), stale IDs (/clear created new JSONL),
+    // and deleted JSONL files (Claude CLI cleanup).
     for (const session of sessions) {
-      if (session.status !== 'running' || session.claudeSessionId) continue;
+      if (session.status !== 'running') continue;
 
       const project = store.getProject(session.projectId);
       if (!project) continue;
@@ -973,15 +975,17 @@ export function createServer({ testMode = false } = {}) {
           .sort((a, b) => b.mtime - a.mtime); // most recently modified first
 
         if (jsonlFiles.length > 0) {
-          const claudeSessionId = jsonlFiles[0].name.replace('.jsonl', '');
-          store.updateSession(session.id, { claudeSessionId });
-          console.log(`[startup] Recovered claude session ID for ${session.name}: ${claudeSessionId}`);
+          const latestId = jsonlFiles[0].name.replace('.jsonl', '');
+          if (latestId !== session.claudeSessionId) {
+            store.updateSession(session.id, { claudeSessionId: latestId });
+            console.log(`[startup] Updated claude session ID for ${session.name}: ${latestId}${session.claudeSessionId ? ` (was ${session.claudeSessionId})` : ' (was null)'}`);
+          }
         } else {
           console.warn(`[startup] No JSONL files found for ${session.name}, marking exited`);
           store.updateSession(session.id, { status: 'exited' });
         }
       } catch (err) {
-        console.warn(`[startup] Could not recover session ID for ${session.name}: ${err.message}`);
+        console.warn(`[startup] Could not resolve session ID for ${session.name}: ${err.message}`);
         store.updateSession(session.id, { status: 'exited' });
       }
     }
