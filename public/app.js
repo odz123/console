@@ -771,7 +771,7 @@
         li.appendChild(actions);
 
         li.onclick = async () => {
-          if (!s.alive && (s.claudeSessionId || s.provider === 'codex')) {
+          if (!s.alive) {
             await restartSession(s.id);
           }
           attachSession(s.id);
