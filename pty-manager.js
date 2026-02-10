@@ -68,7 +68,7 @@ export class PtyManager {
     this.shellProcesses = new Map();
   }
 
-  spawn(sessionId, { cwd, resumeId, cols = 80, rows = 24, shell, args }) {
+  spawn(sessionId, { cwd, resumeId, cols = 80, rows = 24, shell, args, provider = 'claude' }) {
     if (this.processes.has(sessionId)) {
       throw new Error(`Session ${sessionId} already exists`);
     }
@@ -77,12 +77,13 @@ export class PtyManager {
     if (shell) {
       command = shell;
       cmdArgs = args || [];
-    } else if (resumeId) {
-      command = 'claude';
-      cmdArgs = ['--resume', resumeId];
+    } else if (provider === 'codex') {
+      command = 'codex';
+      cmdArgs = resumeId ? ['resume', resumeId] : [];
     } else {
+      // claude (default)
       command = 'claude';
-      cmdArgs = [];
+      cmdArgs = resumeId ? ['--resume', resumeId] : [];
     }
 
     const ptyProcess = pty.spawn(command, cmdArgs, {

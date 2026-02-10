@@ -7,11 +7,14 @@ import fs from 'node:fs';
 const DEFAULT_DB_DIR = path.join(os.homedir(), '.claude-console');
 const DEFAULT_DB_PATH = path.join(DEFAULT_DB_DIR, 'data.db');
 
+const VALID_PROVIDERS = ['claude', 'codex'];
+
 function rowToProject(row) {
   return {
     id: row.id,
     name: row.name,
     cwd: row.cwd,
+    provider: row.provider || 'claude',
     createdAt: row.created_at,
   };
 }
@@ -51,6 +54,7 @@ export function createStore(dbPath) {
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
       cwd TEXT NOT NULL,
+      provider TEXT NOT NULL DEFAULT 'claude',
       created_at TEXT NOT NULL
     );
 
@@ -68,11 +72,17 @@ export function createStore(dbPath) {
     CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id);
   `);
 
+  // Migration: add provider column if missing (existing databases)
+  const columns = db.pragma('table_info(projects)').map(c => c.name);
+  if (!columns.includes('provider')) {
+    db.exec(`ALTER TABLE projects ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`);
+  }
+
   // Prepared statements
   const stmts = {
     getProjects: db.prepare('SELECT * FROM projects ORDER BY created_at ASC'),
     getProject: db.prepare('SELECT * FROM projects WHERE id = ?'),
-    insertProject: db.prepare('INSERT INTO projects (id, name, cwd, created_at) VALUES (@id, @name, @cwd, @createdAt)'),
+    insertProject: db.prepare('INSERT INTO projects (id, name, cwd, provider, created_at) VALUES (@id, @name, @cwd, @provider, @createdAt)'),
     deleteProjectSessions: db.prepare('DELETE FROM sessions WHERE project_id = ?'),
     deleteProject: db.prepare('DELETE FROM projects WHERE id = ?'),
     getSessions: db.prepare('SELECT * FROM sessions WHERE project_id = ? ORDER BY created_at ASC'),
@@ -98,8 +108,12 @@ export function createStore(dbPath) {
       return row ? rowToProject(row) : undefined;
     },
 
-    createProject({ id, name, cwd, createdAt }) {
-      stmts.insertProject.run({ id, name, cwd, createdAt });
+    createProject({ id, name, cwd, provider, createdAt }) {
+      const p = provider || 'claude';
+      if (!VALID_PROVIDERS.includes(p)) {
+        throw new Error(`Invalid provider: ${p}. Must be one of: ${VALID_PROVIDERS.join(', ')}`);
+      }
+      stmts.insertProject.run({ id, name, cwd, provider: p, createdAt });
       return this.getProject(id);
     },
 

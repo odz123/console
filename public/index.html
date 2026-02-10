@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Claude Console</title>
+  <title>Console</title>
   <link rel="stylesheet" href="/vendor/xterm.css">
   <link rel="stylesheet" href="/style.css">
 </head>
@@ -61,6 +61,11 @@
       <h2>Add Project</h2>
       <label for="modal-project-name">Project Name</label>
       <input id="modal-project-name" type="text" placeholder="My Project" autofocus>
+      <label for="modal-project-provider">Provider</label>
+      <select id="modal-project-provider">
+        <option value="claude">Claude</option>
+        <option value="codex">Codex</option>
+      </select>
       <label for="modal-project-path">Directory</label>
       <div class="path-input-row">
         <input id="modal-project-path" type="text" placeholder="Select a directory..." readonly>

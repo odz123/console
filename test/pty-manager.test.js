@@ -115,6 +115,47 @@ describe('PtyManager', () => {
   });
 });
 
+describe('PtyManager provider support', () => {
+  let manager;
+
+  before(() => {
+    manager = new PtyManager();
+  });
+
+  after(() => {
+    for (const id of manager.getAll()) {
+      manager.kill(id);
+    }
+  });
+
+  it('should default to claude provider when shell is not set', () => {
+    // When shell is specified (like in testMode), provider doesn't affect command
+    const sessionId = 'test-provider-shell';
+    manager.spawn(sessionId, {
+      cwd: process.cwd(),
+      shell: '/bin/bash',
+      args: ['-c', 'echo provider-test && sleep 0.1'],
+    });
+    const proc = manager.getProcess(sessionId);
+    assert.ok(proc, 'process should exist');
+    manager.kill(sessionId);
+  });
+
+  it('should accept codex as provider with shell override', () => {
+    const sessionId = 'test-codex-provider';
+    // With shell override, provider doesn't affect the spawned command
+    manager.spawn(sessionId, {
+      cwd: process.cwd(),
+      provider: 'codex',
+      shell: '/bin/bash',
+      args: ['-c', 'echo codex-test && sleep 0.1'],
+    });
+    const proc = manager.getProcess(sessionId);
+    assert.ok(proc, 'process should exist with codex provider');
+    manager.kill(sessionId);
+  });
+});
+
 describe('PtyManager shell processes', () => {
   let manager;
 

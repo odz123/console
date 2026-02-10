@@ -302,17 +302,28 @@ export function createServer({ testMode = false } = {}) {
     }
   }
 
-  /** Derive the ~/.claude/projects/ directory for a given cwd. */
-  function getClaudeProjectDir(cwd) {
+  /** Derive the session storage directory for a given provider and cwd. */
+  function getCliSessionDir(provider, cwd) {
+    if (provider === 'codex') {
+      // Codex stores sessions in ~/.codex/sessions/ (flat, not per-project)
+      return path.join(os.homedir(), '.codex', 'sessions');
+    }
+    // Claude stores sessions in ~/.claude/projects/{hash}/
     return path.join(
       os.homedir(), '.claude', 'projects',
       fs.realpathSync(cwd).replace(/\//g, '-').replace(/\./g, '-'),
     );
   }
 
+  // Backward-compatible alias used in a few places
+  function getClaudeProjectDir(cwd) {
+    return getCliSessionDir('claude', cwd);
+  }
+
   async function spawnSession(session) {
     const project = store.getProject(session.projectId);
     if (!project) throw new Error('Project not found for session');
+    const provider = project.provider || 'claude';
 
     let cwd = project.cwd;
     if (session.worktreePath) {
@@ -325,26 +336,27 @@ export function createServer({ testMode = false } = {}) {
       }
     }
 
-    // Capture the Claude session ID by watching ~/.claude/projects/ for new .jsonl files.
-    // Claude CLI stores conversations as {sessionId}.jsonl in a directory derived from
-    // the realpath of the cwd: replace '/' and '.' with '-'.
-    // Snapshot BEFORE spawn to avoid race where Claude creates the file instantly.
+    // Capture the CLI session ID by watching the provider's session directory for new .jsonl files.
+    // - Claude: ~/.claude/projects/{hash}/{sessionId}.jsonl (per-project, hash derived from cwd)
+    // - Codex:  ~/.codex/sessions/{sessionId}.jsonl (flat directory)
+    // Snapshot BEFORE spawn to avoid race where the CLI creates the file instantly.
     let existingJsonlFiles;
     if (!testMode && !session.claudeSessionId) {
-      const claudeProjectDir = getClaudeProjectDir(cwd);
+      const sessionDir = getCliSessionDir(provider, cwd);
 
       existingJsonlFiles = new Set();
       try {
         existingJsonlFiles = new Set(
-          fs.readdirSync(claudeProjectDir).filter(f => f.endsWith('.jsonl')),
+          fs.readdirSync(sessionDir).filter(f => f.endsWith('.jsonl')),
         );
       } catch {
-        // Directory may not exist yet — Claude will create it
+        // Directory may not exist yet — CLI will create it
       }
     }
 
     const spawnOpts = {
       cwd,
+      provider,
       ...(testMode
         ? { shell: '/bin/bash', args: ['-c', 'sleep 5'] }
         : session.claudeSessionId
@@ -370,7 +382,7 @@ export function createServer({ testMode = false } = {}) {
     });
 
     if (existingJsonlFiles) {
-      const claudeProjectDir = getClaudeProjectDir(cwd);
+      const sessionDir = getCliSessionDir(provider, cwd);
       const MAX_POLL_MS = 60_000; // give up after 60s
       const startTime = Date.now();
 
@@ -380,7 +392,7 @@ export function createServer({ testMode = false } = {}) {
           return;
         }
         try {
-          const current = fs.readdirSync(claudeProjectDir).filter(f => f.endsWith('.jsonl'));
+          const current = fs.readdirSync(sessionDir).filter(f => f.endsWith('.jsonl'));
           const newFile = current.find(f => !existingJsonlFiles.has(f));
           if (newFile) {
             const claudeSessionId = newFile.replace('.jsonl', '');
@@ -411,13 +423,19 @@ export function createServer({ testMode = false } = {}) {
     });
   });
 
+  const VALID_PROVIDERS = ['claude', 'codex'];
+
   app.post('/api/projects', async (req, res) => {
-    const { name, cwd } = req.body;
+    const { name, cwd, provider } = req.body;
     if (!name || typeof name !== 'string' || name.length > MAX_NAME_LENGTH) {
       return res.status(400).json({ error: `name is required (string, max ${MAX_NAME_LENGTH} chars)` });
     }
     if (!cwd || typeof cwd !== 'string' || cwd.length > MAX_CWD_LENGTH) {
       return res.status(400).json({ error: `cwd is required (string, max ${MAX_CWD_LENGTH} chars)` });
+    }
+    const resolvedProvider = provider || 'claude';
+    if (!VALID_PROVIDERS.includes(resolvedProvider)) {
+      return res.status(400).json({ error: `provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
     }
 
     const expanded = cwd.startsWith('~') ? cwd.replace(/^~/, os.homedir()) : cwd;
@@ -444,6 +462,7 @@ export function createServer({ testMode = false } = {}) {
       id: crypto.randomUUID(),
       name,
       cwd: resolvedCwd,
+      provider: resolvedProvider,
       createdAt: new Date().toISOString(),
     });
 
@@ -935,7 +954,7 @@ export function createServer({ testMode = false } = {}) {
   if (!testMode) {
     const sessions = store.getAll().sessions;
 
-    // First pass: resolve the latest Claude session ID for every resumable session.
+    // First pass: resolve the latest CLI session ID for every resumable session.
     // This handles: null IDs (polling failed), stale IDs (/clear created new JSONL),
     // deleted JSONL files, and exited sessions that can be revived.
     for (const session of sessions) {
@@ -943,6 +962,7 @@ export function createServer({ testMode = false } = {}) {
 
       const project = store.getProject(session.projectId);
       if (!project) continue;
+      const provider = project.provider || 'claude';
 
       try {
         let cwd = project.cwd;
@@ -965,15 +985,16 @@ export function createServer({ testMode = false } = {}) {
           }
           cwd = resolved;
         }
-        const claudeProjectDir = getClaudeProjectDir(cwd);
+        const sessionDir = getCliSessionDir(provider, cwd);
         // Find the most recently modified JSONL that contains an actual conversation.
         // Claude CLI creates stub files (only file-history-snapshot entries) on every
         // launch including failed --resume attempts. Skip those.
-        const jsonlFiles = fs.readdirSync(claudeProjectDir)
+        // Codex stores sessions in ~/.codex/sessions/ which may also have stub files.
+        const jsonlFiles = fs.readdirSync(sessionDir)
           .filter(f => {
             if (!f.endsWith('.jsonl')) return false;
             // Check if file has conversation data (not just snapshots)
-            const content = fs.readFileSync(path.join(claudeProjectDir, f), 'utf8');
+            const content = fs.readFileSync(path.join(sessionDir, f), 'utf8');
             const lines = content.split('\n').filter(Boolean);
             return lines.some(line => {
               try {
@@ -984,7 +1005,7 @@ export function createServer({ testMode = false } = {}) {
           })
           .map(f => ({
             name: f,
-            mtime: fs.statSync(path.join(claudeProjectDir, f)).mtimeMs,
+            mtime: fs.statSync(path.join(sessionDir, f)).mtimeMs,
           }))
           .sort((a, b) => b.mtime - a.mtime); // most recently modified conversation first
 
@@ -992,7 +1013,7 @@ export function createServer({ testMode = false } = {}) {
           const latestId = jsonlFiles[0].name.replace('.jsonl', '');
           if (latestId !== session.claudeSessionId || session.status === 'exited') {
             store.updateSession(session.id, { claudeSessionId: latestId, status: 'running' });
-            console.log(`[startup] Updated claude session ID for ${session.name}: ${latestId}${session.claudeSessionId ? ` (was ${session.claudeSessionId})` : ' (was null)'}${session.status === 'exited' ? ' (revived)' : ''}`);
+            console.log(`[startup] Updated ${provider} session ID for ${session.name}: ${latestId}${session.claudeSessionId ? ` (was ${session.claudeSessionId})` : ' (was null)'}${session.status === 'exited' ? ' (revived)' : ''}`);
           }
         } else {
           console.warn(`[startup] No JSONL files found for ${session.name}, marking exited`);
@@ -1083,6 +1104,6 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   const port = process.env.PORT || 3000;
   const server = createServer();
   server.listen(port, '127.0.0.1', () => {
-    console.log(`Claude Console running at http://127.0.0.1:${port}`);
+    console.log(`Console running at http://127.0.0.1:${port}`);
   });
 }

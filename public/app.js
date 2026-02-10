@@ -48,6 +48,7 @@
   const btnHomeAddProject = document.getElementById('btn-home-add-project');
   const modalOverlay = document.getElementById('modal-overlay');
   const modalProjectName = document.getElementById('modal-project-name');
+  const modalProjectProvider = document.getElementById('modal-project-provider');
   const modalProjectPath = document.getElementById('modal-project-path');
   const btnBrowse = document.getElementById('btn-browse');
   const dirBrowser = document.getElementById('dir-browser');
@@ -592,6 +593,14 @@
       name.className = 'project-name';
       name.textContent = proj.name;
 
+      // Provider badge
+      if (proj.provider && proj.provider !== 'claude') {
+        const providerBadge = document.createElement('span');
+        providerBadge.className = 'provider-badge provider-' + proj.provider;
+        providerBadge.textContent = proj.provider;
+        name.appendChild(providerBadge);
+      }
+
       const del = document.createElement('button');
       del.className = 'project-delete';
       del.textContent = '\u00D7';
@@ -747,11 +756,11 @@
   }
 
   // --- API calls ---
-  async function createProject(name, cwd) {
+  async function createProject(name, cwd, provider) {
     const res = await fetch('/api/projects', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, cwd }),
+      body: JSON.stringify({ name, cwd, provider }),
     });
     if (!res.ok) {
       const err = await res.json();
@@ -954,6 +963,7 @@
   // --- Modal ---
   function openModal() {
     modalProjectName.value = '';
+    modalProjectProvider.value = 'claude';
     modalProjectPath.value = '';
     dirBrowser.classList.add('hidden');
     btnModalCreate.disabled = true;
@@ -992,9 +1002,10 @@
   btnModalCreate.onclick = async () => {
     const name = modalProjectName.value.trim();
     const cwd = modalProjectPath.value.trim();
+    const provider = modalProjectProvider.value;
     if (!name || !cwd) return;
     btnModalCreate.disabled = true;
-    const proj = await createProject(name, cwd);
+    const proj = await createProject(name, cwd, provider);
     if (proj) {
       expandedProjects.add(proj.id);
       closeModal();
@@ -1155,12 +1166,16 @@
     tabBar.classList.add('visible');
     tabList.innerHTML = '';
 
-    // Claude tab (always first, never closeable)
+    // CLI tab (always first, never closeable)
     const claudeTab = document.createElement('div');
     claudeTab.className = 'tab' + (activeTabId === 'claude' ? ' active' : '');
     const claudeLabel = document.createElement('span');
     claudeLabel.className = 'tab-label';
-    claudeLabel.textContent = 'Claude';
+    // Show provider name for the main tab
+    const activeSession = sessions.find(s => s.id === activeSessionId);
+    const activeProject = activeSession ? projects.find(p => p.id === activeSession.projectId) : null;
+    const providerName = activeProject && activeProject.provider === 'codex' ? 'Codex' : 'Claude';
+    claudeLabel.textContent = providerName;
     claudeTab.appendChild(claudeLabel);
     claudeTab.onclick = () => switchTab('claude');
     tabList.appendChild(claudeTab);

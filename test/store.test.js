@@ -42,10 +42,47 @@ describe('Store: project CRUD', () => {
     assert.strictEqual(project.id, 'p1');
     assert.strictEqual(project.name, 'test-proj');
     assert.strictEqual(project.cwd, '/tmp/test');
+    assert.strictEqual(project.provider, 'claude');
     assert.strictEqual(project.createdAt, '2026-02-06T00:00:00.000Z');
 
     const fetched = store.getProject('p1');
     assert.deepStrictEqual(fetched, project);
+  });
+
+  it('createProject with codex provider', () => {
+    const store = createStore(':memory:');
+    const project = store.createProject({
+      id: 'p1',
+      name: 'codex-proj',
+      cwd: '/tmp/test',
+      provider: 'codex',
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.strictEqual(project.provider, 'codex');
+  });
+
+  it('createProject defaults to claude provider', () => {
+    const store = createStore(':memory:');
+    const project = store.createProject({
+      id: 'p1',
+      name: 'default-proj',
+      cwd: '/tmp/test',
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.strictEqual(project.provider, 'claude');
+  });
+
+  it('createProject rejects invalid provider', () => {
+    const store = createStore(':memory:');
+    assert.throws(() => {
+      store.createProject({
+        id: 'p1',
+        name: 'bad-provider',
+        cwd: '/tmp/test',
+        provider: 'invalid',
+        createdAt: '2026-02-06T00:00:00.000Z',
+      });
+    }, /Invalid provider/);
   });
 
   it('getProject returns undefined for missing id', () => {

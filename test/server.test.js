@@ -73,6 +73,39 @@ describe('Projects API', () => {
     assert.ok(proj.createdAt);
   });
 
+  it('POST /api/projects creates a project with provider', async () => {
+    const res = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'codex-proj', cwd: process.cwd(), provider: 'codex' }),
+    });
+    assert.strictEqual(res.status, 201);
+    const proj = await res.json();
+    assert.strictEqual(proj.provider, 'codex');
+  });
+
+  it('POST /api/projects defaults to claude provider', async () => {
+    const res = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'default-proj', cwd: process.cwd() }),
+    });
+    assert.strictEqual(res.status, 201);
+    const proj = await res.json();
+    assert.strictEqual(proj.provider, 'claude');
+  });
+
+  it('POST /api/projects rejects invalid provider', async () => {
+    const res = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'bad', cwd: process.cwd(), provider: 'invalid' }),
+    });
+    assert.strictEqual(res.status, 400);
+    const data = await res.json();
+    assert.ok(data.error.includes('provider'));
+  });
+
   it('POST /api/projects rejects invalid cwd', async () => {
     const res = await fetch(`${baseUrl}/api/projects`, {
       method: 'POST',

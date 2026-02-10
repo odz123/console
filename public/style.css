@@ -421,7 +421,8 @@ body {
   margin-top: 12px;
 }
 
-#modal input[type="text"] {
+#modal input[type="text"],
+#modal select {
   width: 100%;
   padding: 8px 10px;
   background: #1a1a2e;
@@ -545,6 +546,22 @@ body {
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+/* Provider badge (shown on project name for non-default providers) */
+.provider-badge {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 1px 5px;
+  border-radius: 3px;
+  margin-left: 6px;
+  vertical-align: middle;
+}
+.provider-codex {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.15);
 }
 
 .session-actions {
