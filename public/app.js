@@ -10,6 +10,7 @@
   let projects = [];
   let sessions = [];
   let expandedProjects = new Set();
+  const sessionIdleState = new Map();
   let reconnectDelay = 1000;
   let toastTimeout = null;
   let shellTerm = null;
@@ -459,6 +460,20 @@
         case 'state':
           projects = msg.projects;
           sessions = msg.sessions;
+          // Reconcile idle state: overwrite with server state and prune stale entries
+          {
+            const currentSessionIds = new Set(sessions.map(s => s.id));
+            for (const [id] of sessionIdleState) {
+              if (!currentSessionIds.has(id)) {
+                sessionIdleState.delete(id);
+              }
+            }
+            for (const s of sessions) {
+              if (s.idle !== undefined) {
+                sessionIdleState.set(s.id, s.idle);
+              }
+            }
+          }
           // Reconcile: if active session no longer exists, return to home
           if (activeSessionId && !sessions.find((s) => s.id === activeSessionId)) {
             activeSessionId = null;
@@ -474,6 +489,7 @@
           break;
 
         case 'session-deleted':
+          sessionIdleState.delete(msg.sessionId);
           if (msg.sessionId === activeSessionId) {
             activeSessionId = null;
             term.reset();
@@ -490,6 +506,13 @@
           // Session still exists, just re-render sidebar to update status dot
           renderSidebar();
           break;
+
+        case 'session-idle': {
+          const { sessionId, idle } = msg;
+          sessionIdleState.set(sessionId, idle);
+          updateStatusDot(sessionId, idle);
+          break;
+        }
 
         case 'shell-output':
           if (msg.sessionId === activeSessionId && msg.data) {
@@ -582,6 +605,13 @@
     renderSidebar();
   }
 
+  function updateStatusDot(sessionId, idle) {
+    const dot = document.querySelector(`[data-session-id="${sessionId}"] .status-dot`);
+    if (dot) {
+      dot.classList.toggle('active', !idle);
+    }
+  }
+
   // --- Sidebar ---
   function renderSidebar() {
     projectListEl.innerHTML = '';
@@ -647,11 +677,19 @@
 
       for (const s of projSessions) {
         const li = document.createElement('li');
+        li.dataset.sessionId = s.id;
         if (s.id === activeSessionId) li.classList.add('active');
 
         const dot = document.createElement('span');
         dot.className = 'status-dot';
-        dot.classList.add(s.alive ? 'alive' : 'exited');
+        if (s.alive) {
+          dot.classList.add('alive');
+          const idle = sessionIdleState.has(s.id) ? sessionIdleState.get(s.id) : s.idle;
+          if (!idle) dot.classList.add('active');
+        } else {
+          dot.classList.add('exited');
+          sessionIdleState.delete(s.id);
+        }
 
         // Session info container (name + optional branch badge)
         const infoContainer = document.createElement('div');

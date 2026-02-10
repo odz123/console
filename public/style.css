@@ -130,7 +130,21 @@ body {
   flex-shrink: 0;
 }
 .status-dot.alive { background: #4ade80; }
+.status-dot.alive.active {
+  animation: pulse 1.5s ease-in-out infinite;
+}
 .status-dot.exited { background: #6b7280; }
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  50% {
+    opacity: 0.5;
+    transform: scale(1.2);
+  }
+}
 
 .session-name {
   flex: 1;
