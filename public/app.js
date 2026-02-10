@@ -1454,6 +1454,8 @@
     switchTab(activeTabId);
   }
 
+  const pendingFileOpens = new Set();
+
   async function openFileTab(filePath, filename) {
     // Check if already open
     const existing = openTabs.find(t => t.id === filePath);
@@ -1462,8 +1464,17 @@
       return;
     }
 
+    // Guard against duplicate concurrent fetches (e.g. double-click)
+    if (pendingFileOpens.has(filePath)) return;
+    pendingFileOpens.add(filePath);
+
     // Fetch file content
-    const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(filePath)}`);
+    let res;
+    try {
+      res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(filePath)}`);
+    } finally {
+      pendingFileOpens.delete(filePath);
+    }
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: 'Failed to load file' }));

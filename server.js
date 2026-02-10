@@ -169,6 +169,8 @@ export function createServer({ testMode = false } = {}) {
       if (jsonStr.length < 1024) return _json.call(this, body);
 
       zlib.gzip(Buffer.from(jsonStr), (err, compressed) => {
+        // Response may already be sent (e.g. request timeout fired during gzip)
+        if (res.headersSent) return;
         if (err) return _json.call(this, body);
         res.setHeader('Content-Encoding', 'gzip');
         res.setHeader('Vary', 'Accept-Encoding');
@@ -431,7 +433,12 @@ export function createServer({ testMode = false } = {}) {
     }
 
     // Read file and check for binary (null bytes in first 8KB)
-    const content = await fs.promises.readFile(realResolved);
+    let content;
+    try {
+      content = await fs.promises.readFile(realResolved);
+    } catch {
+      return res.status(404).json({ error: 'File not found' });
+    }
     const checkBytes = content.subarray(0, 8192);
     if (checkBytes.includes(0)) {
       return res.json({ isBinary: true });
@@ -1456,6 +1463,7 @@ export function createServer({ testMode = false } = {}) {
         sessions: sessions.map((s) => ({
           ...s,
           alive: manager.isAlive(s.id),
+          idle: manager.isIdle(s.id),
         })),
       })
     );
