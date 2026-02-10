@@ -67,6 +67,7 @@
   const fileViewerRefresh = document.getElementById('file-viewer-refresh');
   const fileViewerContent = document.getElementById('file-viewer-content');
   const btnToggleFileTree = document.getElementById('btn-toggle-file-tree');
+  const btnRefreshFileTree = document.getElementById('btn-refresh-file-tree');
   const fileTreeSection = document.getElementById('file-tree-section');
 
   // --- Helpers ---
@@ -598,9 +599,11 @@
       del.title = 'Delete project';
       del.onclick = (e) => {
         e.stopPropagation();
-        if (confirm(`Delete project "${proj.name}" and all its sessions?`)) {
-          deleteProject(proj.id);
-        }
+        showConfirmDialog(
+          'Delete Project',
+          `Delete project "${proj.name}" and all its sessions?`,
+          () => deleteProject(proj.id)
+        );
       };
 
       header.appendChild(arrow);
@@ -642,6 +645,10 @@
         const sName = document.createElement('span');
         sName.className = 'session-name';
         sName.textContent = s.name;
+        sName.ondblclick = (e) => {
+          e.stopPropagation();
+          startSessionRename(sName, s.id, s.name);
+        };
         infoContainer.appendChild(sName);
 
         // Branch badge (if session has worktree)
@@ -744,6 +751,45 @@
     input.onblur = () => {
       setTimeout(() => input.remove(), 150);
     };
+  }
+
+  function startSessionRename(nameEl, sessionId, currentName) {
+    const input = document.createElement('input');
+    input.className = 'inline-session-input';
+    input.style.margin = '0';
+    input.style.width = '100%';
+    input.type = 'text';
+    input.value = currentName;
+    nameEl.replaceWith(input);
+    input.focus();
+    input.select();
+
+    let committed = false;
+    const commit = async () => {
+      if (committed) return;
+      committed = true;
+      const newName = input.value.trim();
+      if (newName && newName !== currentName) {
+        await fetch(`/api/sessions/${sessionId}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name: newName }),
+        });
+      }
+      // State broadcast will trigger renderSidebar
+    };
+
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        commit();
+      } else if (e.key === 'Escape') {
+        committed = true; // skip commit
+        renderSidebar(); // revert
+      }
+    };
+
+    input.onblur = () => commit();
   }
 
   // --- API calls ---
@@ -1149,6 +1195,12 @@
     });
   };
 
+  // File tree refresh button
+  btnRefreshFileTree.onclick = () => {
+    if (!activeSessionId) return;
+    renderFileTreeDir(fileTreeEl, '', 0);
+  };
+
   // --- Tab System ---
 
   function renderTabs() {
@@ -1285,9 +1337,17 @@
       return;
     }
 
-    // Plain text
+    // Plain text with line numbers
     fileViewerContent.className = 'plain-text';
-    fileViewerContent.textContent = tab.content;
+    const lines = tab.content.split('\n');
+    const gutter = document.createElement('div');
+    gutter.className = 'line-numbers';
+    gutter.textContent = lines.map((_, i) => i + 1).join('\n');
+    const code = document.createElement('div');
+    code.className = 'line-content';
+    code.textContent = tab.content;
+    fileViewerContent.appendChild(gutter);
+    fileViewerContent.appendChild(code);
   }
 
   // Refresh button handler
@@ -1353,7 +1413,21 @@
   });
 
   document.addEventListener('mousemove', (e) => {
-    if (!isDragging) return;
+    if (!isDragging && !isSidebarDragging) return;
+
+    if (isSidebarDragging) {
+      if (sidebarRafPending) return;
+      sidebarRafPending = true;
+      requestAnimationFrame(() => {
+        sidebarRafPending = false;
+        const newWidth = Math.max(160, Math.min(e.clientX, 500));
+        sidebar.style.width = newWidth + 'px';
+        sidebar.style.minWidth = newWidth + 'px';
+        if (fitAddon) fitAddon.fit();
+      });
+      return;
+    }
+
     if (rafPending) return; // true single-frame debounce
 
     rafPending = true;
@@ -1380,6 +1454,26 @@
       document.body.style.userSelect = '';
       if (shellFitAddon) shellFitAddon.fit();
     }
+    if (isSidebarDragging) {
+      isSidebarDragging = false;
+      document.body.style.cursor = '';
+      document.body.style.userSelect = '';
+      if (fitAddon) fitAddon.fit();
+    }
+  });
+
+  // --- Sidebar Divider Drag ---
+
+  const sidebar = document.getElementById('sidebar');
+  const sidebarDivider = document.getElementById('sidebar-divider');
+  let isSidebarDragging = false;
+  let sidebarRafPending = false;
+
+  sidebarDivider.addEventListener('mousedown', (e) => {
+    isSidebarDragging = true;
+    e.preventDefault();
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
   });
 
   // --- Init ---

@@ -82,6 +82,7 @@ export function createStore(dbPath) {
       'INSERT INTO sessions (id, project_id, name, branch_name, worktree_path, claude_session_id, status, created_at) VALUES (@id, @projectId, @name, @branchName, @worktreePath, @claudeSessionId, @status, @createdAt)'
     ),
     updateSession: db.prepare('UPDATE sessions SET status = @status, claude_session_id = @claudeSessionId WHERE id = @id'),
+    renameSession: db.prepare('UPDATE sessions SET name = @name WHERE id = @id'),
     deleteSession: db.prepare('DELETE FROM sessions WHERE id = ?'),
     getSessionWorktreePaths: db.prepare(
       'SELECT worktree_path FROM sessions WHERE project_id = ? AND worktree_path IS NOT NULL'
@@ -140,6 +141,10 @@ export function createStore(dbPath) {
         claudeSessionId: fields.claudeSessionId !== undefined ? fields.claudeSessionId : current.claudeSessionId,
       });
       return this.getSession(id);
+    },
+
+    renameSession(id, name) {
+      stmts.renameSession.run({ id, name });
     },
 
     deleteSession(id) {
