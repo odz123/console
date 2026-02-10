@@ -1826,6 +1826,7 @@ export function createServer({ testMode = false } = {}) {
         }
         spawnSession(session).then(() => {
           console.log(`Resumed session: ${session.name} (${session.provider})`);
+          broadcastState();
         }).catch((e) => {
           console.error(`Failed to resume ${session.name}: ${e.message}`);
           store.updateSession(session.id, { status: 'exited' });
