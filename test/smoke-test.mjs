@@ -35,7 +35,7 @@ function check(name, ok, detail) {
 
 function createTempRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'smoke-test-'));
-  execSync('git init && git commit --allow-empty -m "init"', {
+  execSync('git init && git -c commit.gpgsign=false commit --allow-empty -m "init"', {
     cwd: dir,
     env: { ...process.env, ...gitEnv },
   });
@@ -43,7 +43,7 @@ function createTempRepo() {
   fs.writeFileSync(path.join(dir, 'app.js'), 'console.log("hello");');
   fs.mkdirSync(path.join(dir, 'src'));
   fs.writeFileSync(path.join(dir, 'src', 'index.js'), 'export default 42;');
-  execSync('git add -A && git commit -m "add test files"', {
+  execSync('git add -A && git -c commit.gpgsign=false commit -m "add test files"', {
     cwd: dir,
     env: { ...process.env, ...gitEnv },
   });

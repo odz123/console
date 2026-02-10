@@ -1021,13 +1021,13 @@ export function createServer({ testMode = false } = {}) {
           store.updateSession(session.id, { status: 'exited' });
           continue;
         }
-        try {
-          spawnSession(session);
+        spawnSession(session).then(() => {
           console.log(`Resumed session: ${session.name}`);
-        } catch (e) {
+        }).catch((e) => {
           console.error(`Failed to resume ${session.name}: ${e.message}`);
           store.updateSession(session.id, { status: 'exited' });
-        }
+          broadcastState();
+        });
       }
     }
   }
@@ -1070,6 +1070,7 @@ export function createServer({ testMode = false } = {}) {
         client.terminate();
       }
       clients.clear();
+      server.closeAllConnections();
       server.close(resolve);
     });
   };

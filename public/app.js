@@ -689,9 +689,9 @@
         li.appendChild(time);
         li.appendChild(actions);
 
-        li.onclick = () => {
+        li.onclick = async () => {
           if (!s.alive && s.claudeSessionId) {
-            restartSession(s.id);
+            await restartSession(s.id);
           }
           attachSession(s.id);
         };
@@ -833,6 +833,10 @@
       term.reset();
       noSession.classList.remove('hidden');
       rightPanel.classList.add('hidden');
+      tabBar.classList.remove('visible');
+      fileViewer.classList.add('hidden');
+      document.getElementById('terminal-wrapper').style.display = '';
+      document.getElementById('terminal-wrapper').style.inset = '0';
     }
   }
 

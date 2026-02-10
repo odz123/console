@@ -20,7 +20,7 @@ function createTempDir() {
 
 function createTempRepo() {
   const dir = createTempDir();
-  execSync('git init && git commit --allow-empty -m "init"', {
+  execSync('git init && git -c commit.gpgsign=false commit --allow-empty -m "init"', {
     cwd: dir,
     env: { ...process.env, ...gitEnv },
   });
@@ -686,11 +686,11 @@ describe('Shell WebSocket', () => {
     if (tempDir) cleanupDir(tempDir);
   });
 
-  it('shell-attach spawns shell and replays buffer', async () => {
+  it('shell-attach spawns shell, replays buffer, and handles input/output', async () => {
     const { WebSocket } = await import('ws');
     const ws = new WebSocket(wsUrl);
 
-    await new Promise((resolve) => ws.on('open', resolve));
+    await new Promise((resolve) => ws.once('open', resolve));
 
     // Skip the initial state message
     await new Promise((resolve) => ws.once('message', resolve));
@@ -706,47 +706,23 @@ describe('Shell WebSocket', () => {
     // Should receive shell-replay-done
     const messages = [];
     await new Promise((resolve) => {
-      ws.on('message', (raw) => {
+      const handler = (raw) => {
         const msg = JSON.parse(raw.toString());
         messages.push(msg);
-        if (msg.type === 'shell-replay-done') resolve();
-      });
-      // Timeout safety
-      setTimeout(resolve, 1000);
+        if (msg.type === 'shell-replay-done') {
+          ws.off('message', handler);
+          resolve();
+        }
+      };
+      ws.on('message', handler);
+      setTimeout(() => { ws.off('message', handler); resolve(); }, 2000);
     });
 
     const replayDone = messages.find((m) => m.type === 'shell-replay-done');
     assert.ok(replayDone, 'should receive shell-replay-done');
     assert.strictEqual(replayDone.sessionId, sessionId);
 
-    ws.close();
-  });
-
-  it('shell-input sends data and shell-output is received', async () => {
-    const { WebSocket } = await import('ws');
-    const ws = new WebSocket(wsUrl);
-
-    await new Promise((resolve) => ws.on('open', resolve));
-    await new Promise((resolve) => ws.once('message', resolve)); // skip state
-
-    // Attach shell
-    ws.send(JSON.stringify({
-      type: 'shell-attach',
-      sessionId,
-      cols: 80,
-      rows: 24,
-    }));
-
-    // Wait for replay-done
-    await new Promise((resolve) => {
-      ws.on('message', (raw) => {
-        const msg = JSON.parse(raw.toString());
-        if (msg.type === 'shell-replay-done') resolve();
-      });
-      setTimeout(resolve, 1000);
-    });
-
-    // Send input
+    // Send input and verify output
     ws.send(JSON.stringify({
       type: 'shell-input',
       sessionId,
@@ -767,11 +743,12 @@ describe('Shell WebSocket', () => {
         }
       };
       ws.on('message', handler);
-      setTimeout(resolve, 1000);
+      setTimeout(() => { ws.off('message', handler); resolve(); }, 2000);
     });
 
     const combined = output.join('');
     assert.ok(combined.includes('shell-test-output'), `expected shell output, got: ${combined}`);
-    ws.close();
+    ws.removeAllListeners();
+    ws.terminate();
   });
 });

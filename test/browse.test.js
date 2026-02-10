@@ -77,7 +77,7 @@ describe('/api/browse with sessionId (session-scoped)', () => {
 
     // Create temp repo with files
     tempDir = fs.mkdtempSync(path.join(os.tmpdir(), 'browse-session-test-'));
-    execSync('git init && git commit --allow-empty -m "init"', {
+    execSync('git init && git -c commit.gpgsign=false commit --allow-empty -m "init"', {
       cwd: tempDir,
       env: { ...process.env, GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@test.com', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@test.com' },
     });
