@@ -122,6 +122,13 @@
   // Live sidebar timer
   let sidebarTimeTimer = null;
 
+  // Connection/restart refs
+  const statusConnection = document.getElementById('status-connection');
+  const statusRestart = document.getElementById('status-restart');
+
+  // Notification dot state
+  let gitChangesPending = false;
+
   // --- Helpers ---
   function wsSend(data) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -148,6 +155,38 @@
     if (days < 30) return `${days}d ago`;
     const months = Math.floor(days / 30);
     return `${months}mo ago`;
+  }
+
+  // --- File type icons ---
+  const FILE_ICONS = {
+    js: ['JS', 'file-icon-js'], mjs: ['JS', 'file-icon-js'], cjs: ['JS', 'file-icon-js'],
+    ts: ['TS', 'file-icon-ts'], tsx: ['TS', 'file-icon-ts'], jsx: ['JS', 'file-icon-js'],
+    py: ['Py', 'file-icon-py'],
+    json: ['{}', 'file-icon-json'], jsonc: ['{}', 'file-icon-json'],
+    md: ['M', 'file-icon-md'], markdown: ['M', 'file-icon-md'],
+    css: ['#', 'file-icon-css'], scss: ['#', 'file-icon-css'], less: ['#', 'file-icon-css'],
+    html: ['<>', 'file-icon-html'], htm: ['<>', 'file-icon-html'],
+    svg: ['Sv', 'file-icon-img'], png: ['Im', 'file-icon-img'], jpg: ['Im', 'file-icon-img'],
+    jpeg: ['Im', 'file-icon-img'], gif: ['Im', 'file-icon-img'], webp: ['Im', 'file-icon-img'],
+    sh: ['$', 'file-icon-sh'], bash: ['$', 'file-icon-sh'], zsh: ['$', 'file-icon-sh'],
+    yml: ['Y', 'file-icon-yml'], yaml: ['Y', 'file-icon-yml'], toml: ['T', 'file-icon-yml'],
+    lock: ['Lk', 'file-icon-lock'],
+    go: ['Go', 'file-icon-ts'], rs: ['Rs', 'file-icon-ts'], rb: ['Rb', 'file-icon-py'],
+    java: ['Jv', 'file-icon-ts'], c: ['C', 'file-icon-ts'], h: ['H', 'file-icon-ts'],
+    cpp: ['C+', 'file-icon-ts'], vue: ['V', 'file-icon-js'], svelte: ['Sv', 'file-icon-js'],
+  };
+
+  function getFileIcon(filename) {
+    const ext = filename.includes('.') ? filename.split('.').pop().toLowerCase() : '';
+    return FILE_ICONS[ext] || ['\u00b7', 'file-icon-default'];
+  }
+
+  function createFileIcon(filename, extraClass) {
+    const [text, cls] = getFileIcon(filename);
+    const icon = document.createElement('span');
+    icon.className = `${extraClass || 'file-icon'} ${cls}`;
+    icon.textContent = text;
+    return icon;
   }
 
   // --- Status bar ---
@@ -203,6 +242,17 @@
     }
     statusActivity.innerHTML =
       `<span class="status-activity-dot ${dotClass}"></span> ${label}`;
+
+    // Show/hide restart button based on session state
+    if (!alive) {
+      statusRestart.classList.remove('hidden');
+      statusInterrupt.style.display = 'none';
+      statusCompact.style.display = 'none';
+    } else {
+      statusRestart.classList.add('hidden');
+      statusInterrupt.style.display = '';
+      statusCompact.style.display = '';
+    }
 
     // Adjust terminal wrapper inset for status bar + breadcrumb
     const termWrapper = document.getElementById('terminal-wrapper');
@@ -594,6 +644,7 @@
 
     ws.onopen = () => {
       reconnectDelay = 1000;
+      updateConnectionStatus(true);
       if (activeSessionId) {
         attachSession(activeSessionId);
       }
@@ -712,7 +763,12 @@
           // Auto-refresh file tree and git when Claude finishes working
           if (idle && wasWorking && sessionId === activeSessionId) {
             renderFileTreeDir(fileTreeEl, '', 0);
-            if (activeRightPanelTab === 'git') refreshGitStatus();
+            if (activeRightPanelTab === 'git') {
+              refreshGitStatus();
+            } else {
+              // Show notification dot on Git tab
+              setGitTabBadge(true);
+            }
           }
           break;
         }
@@ -747,6 +803,7 @@
     };
 
     ws.onclose = () => {
+      updateConnectionStatus(false);
       const jitter = reconnectDelay * (0.5 + Math.random());
       setTimeout(connect, jitter);
       reconnectDelay = Math.min(reconnectDelay * 2, 30000);
@@ -1533,11 +1590,13 @@
       row.className = 'file-tree-item';
       row.style.paddingLeft = (indent + 16) + 'px';
 
+      const icon = createFileIcon(file);
       const label = document.createElement('span');
       label.className = 'file-tree-label';
       label.textContent = file;
       label.title = filePath;
 
+      row.appendChild(icon);
       row.appendChild(label);
       row.onclick = () => openFileTab(filePath, file);
       container.appendChild(row);
@@ -1614,6 +1673,11 @@
       const el = document.createElement('div');
       el.className = 'tab' + (activeTabId === tab.id ? ' active' : '');
       el.title = tab.fullPath;
+
+      // File type icon
+      const origName = tab.fullPath ? tab.fullPath.split('/').pop() : tab.filename;
+      const tabIcon = createFileIcon(origName, 'tab-icon');
+      el.appendChild(tabIcon);
 
       const label = document.createElement('span');
       label.className = 'tab-label';
@@ -1871,16 +1935,20 @@
     if (tab === activeRightPanelTab) return;
     activeRightPanelTab = tab;
     rightPanelTabs.querySelectorAll('.rp-tab').forEach(b => b.classList.toggle('active', b.dataset.rpTab === tab));
+    const searchBox = document.querySelector('.file-tree-search');
     if (tab === 'files') {
       fileTreeEl.classList.remove('hidden');
       gitPanel.classList.add('hidden');
       btnRefreshFileTree.style.display = '';
       btnToggleFileTree.style.display = '';
+      if (searchBox) searchBox.style.display = '';
     } else {
       fileTreeEl.classList.add('hidden');
       gitPanel.classList.remove('hidden');
       btnRefreshFileTree.style.display = 'none';
       btnToggleFileTree.style.display = 'none';
+      if (searchBox) searchBox.style.display = 'none';
+      setGitTabBadge(false);
       refreshGitStatus();
     }
   });
@@ -2949,6 +3017,93 @@
       });
     }, 30000);
   }
+
+  // --- Connection status indicator ---
+
+  function updateConnectionStatus(connected) {
+    if (!statusConnection) return;
+    if (connected) {
+      statusConnection.innerHTML = '<span class="status-connection-dot connected"></span> Connected';
+    } else {
+      statusConnection.innerHTML = '<span class="status-connection-dot disconnected"></span> Reconnecting\u2026';
+    }
+  }
+
+  // --- Restart button ---
+
+  statusRestart.onclick = async () => {
+    if (!activeSessionId) return;
+    statusRestart.disabled = true;
+    statusRestart.textContent = 'Restarting\u2026';
+    await restartSession(activeSessionId);
+    statusRestart.disabled = false;
+    statusRestart.textContent = 'Restart';
+  };
+
+  // --- Git tab notification badge ---
+
+  function setGitTabBadge(show) {
+    gitChangesPending = show;
+    const gitTab = rightPanelTabs.querySelector('[data-rp-tab="git"]');
+    if (!gitTab) return;
+    const existing = gitTab.querySelector('.rp-tab-badge');
+    if (show && !existing) {
+      const badge = document.createElement('span');
+      badge.className = 'rp-tab-badge';
+      gitTab.appendChild(badge);
+    } else if (!show && existing) {
+      existing.remove();
+    }
+  }
+
+  // --- Breadcrumb rename on double-click ---
+
+  breadcrumbSession.ondblclick = () => {
+    if (!activeSessionId) return;
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session) return;
+
+    const currentName = session.name || 'Untitled';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = currentName;
+    input.className = 'breadcrumb-rename-input';
+
+    breadcrumbSession.textContent = '';
+    breadcrumbSession.appendChild(input);
+    input.focus();
+    input.select();
+
+    let committed = false;
+    const commit = async () => {
+      if (committed) return;
+      committed = true;
+      const newName = input.value.trim();
+      if (newName && newName !== currentName) {
+        try {
+          const res = await fetch(`/api/sessions/${activeSessionId}/rename`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName }),
+          });
+          if (res.ok) {
+            session.name = newName;
+            renderSidebar();
+          }
+        } catch { /* ignore */ }
+      }
+      breadcrumbSession.textContent = session.name || 'Untitled';
+    };
+
+    input.onblur = commit;
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') commit();
+      if (e.key === 'Escape') {
+        committed = true;
+        breadcrumbSession.textContent = currentName;
+      }
+    };
+  };
 
   // --- Init ---
   initTerminal();

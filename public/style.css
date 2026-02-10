@@ -1861,6 +1861,94 @@ kbd {
   color: #d95555;
 }
 
+/* --- File type icons --- */
+
+.file-icon {
+  width: 16px;
+  font-size: 12px;
+  text-align: center;
+  flex-shrink: 0;
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  font-weight: 600;
+  line-height: 1;
+}
+.file-icon-js  { color: #e0c88e; }
+.file-icon-ts  { color: #8ebdd0; }
+.file-icon-py  { color: #9ed0c4; }
+.file-icon-json { color: #c4956a; }
+.file-icon-md  { color: #8c8478; }
+.file-icon-css { color: #d98eb0; }
+.file-icon-html { color: #d97757; }
+.file-icon-img { color: #7cba6a; }
+.file-icon-sh  { color: #6ec95e; }
+.file-icon-yml { color: #c4956a; }
+.file-icon-lock { color: #8c8478; }
+.file-icon-default { color: #8c8478; }
+
+.tab-icon {
+  font-size: 11px;
+  width: 14px;
+  text-align: center;
+  flex-shrink: 0;
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  font-weight: 600;
+}
+
+/* --- Connection status --- */
+
+.status-connection-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status-connection-dot.connected {
+  background: #6ec95e;
+}
+.status-connection-dot.disconnected {
+  background: #d95555;
+  animation: status-pulse 1s ease-in-out infinite;
+}
+
+/* --- Restart button --- */
+
+.status-btn-restart {
+  background: #d97757;
+  color: #fff;
+}
+.status-btn-restart:hover {
+  background: #c4653f;
+}
+.status-btn-restart.hidden {
+  display: none;
+}
+
+/* --- Notification dot --- */
+
+.rp-tab-badge {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #d97757;
+  display: inline-block;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* --- Breadcrumb rename --- */
+
+.breadcrumb-rename-input {
+  background: #2b2a27;
+  border: 1px solid #d97757;
+  border-radius: 3px;
+  color: #e8dfd5;
+  font-size: 12px;
+  padding: 0 4px;
+  outline: none;
+  font-family: inherit;
+  max-width: 200px;
+}
+
 /* --- Mobile header (hidden on desktop) --- */
 
 #mobile-header {
