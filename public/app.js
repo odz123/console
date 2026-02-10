@@ -110,6 +110,18 @@
   // Keyboard shortcuts ref
   const shortcutsOverlay = document.getElementById('shortcuts-overlay');
 
+  // Command palette refs
+  const cpOverlay = document.getElementById('command-palette-overlay');
+  const cpInput = document.getElementById('cp-input');
+  const cpResults = document.getElementById('cp-results');
+  let cpSelectedIndex = -1;
+
+  // Scroll-to-bottom ref
+  const scrollToBottomBtn = document.getElementById('scroll-to-bottom');
+
+  // Live sidebar timer
+  let sidebarTimeTimer = null;
+
   // --- Helpers ---
   function wsSend(data) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -459,6 +471,7 @@
       if (was && !claudeSticky) {
         console.debug('[scroll] claude: user scrolled away from bottom');
       }
+      updateScrollToBottomBtn();
     });
 
     // Sticky scroll: scroll after writes are parsed
@@ -467,6 +480,7 @@
       claudePendingScroll = false;
       term.scrollToBottom();
       claudeSticky = true;
+      updateScrollToBottomBtn();
     });
   }
 
@@ -691,9 +705,15 @@
 
         case 'session-idle': {
           const { sessionId, idle } = msg;
+          const wasWorking = sessionIdleState.get(sessionId) === false;
           sessionIdleState.set(sessionId, idle);
           updateStatusDot(sessionId, idle);
           updateStatusBar();
+          // Auto-refresh file tree and git when Claude finishes working
+          if (idle && wasWorking && sessionId === activeSessionId) {
+            renderFileTreeDir(fileTreeEl, '', 0);
+            if (activeRightPanelTab === 'git') refreshGitStatus();
+          }
           break;
         }
 
@@ -1608,6 +1628,18 @@
       };
 
       el.appendChild(label);
+
+      // Diff stats badge
+      if (tab.diffStats) {
+        const stats = document.createElement('span');
+        stats.className = 'tab-diff-stats';
+        const parts = [];
+        if (tab.diffStats.added) parts.push(`<span class="tab-diff-add">+${tab.diffStats.added}</span>`);
+        if (tab.diffStats.removed) parts.push(`<span class="tab-diff-del">-${tab.diffStats.removed}</span>`);
+        if (parts.length) stats.innerHTML = parts.join(' ');
+        el.appendChild(stats);
+      }
+
       el.appendChild(close);
       el.onclick = () => switchTab(tab.id);
       tabList.appendChild(el);
@@ -1636,6 +1668,7 @@
       termWrapper.style.display = '';
       termWrapper.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
       fileViewer.classList.add('hidden');
+      updateScrollToBottomBtn();
       term.focus();
       // Refit terminal synchronously so term.cols/rows are correct before
       // attachSession() sends the attach message with dimensions.
@@ -1646,6 +1679,7 @@
       termWrapper.style.display = 'none';
       fileViewer.classList.remove('hidden');
       fileViewer.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
+      scrollToBottomBtn.classList.add('hidden');
 
       const tab = openTabs.find(t => t.id === tabId);
       if (tab) {
@@ -2265,6 +2299,15 @@
     }
   }
 
+  function countDiffStats(diff) {
+    let added = 0, removed = 0;
+    for (const line of diff.split('\n')) {
+      if (line.startsWith('+') && !line.startsWith('+++')) added++;
+      else if (line.startsWith('-') && !line.startsWith('---')) removed++;
+    }
+    return { added, removed };
+  }
+
   function openDiffTab(filePath, diff, staged) {
     const tabId = `diff:${staged ? 'staged' : 'unstaged'}:${filePath}`;
     const filename = filePath.split('/').pop();
@@ -2273,12 +2316,14 @@
     // Remove existing diff tab for the same file/mode
     openTabs = openTabs.filter(t => t.id !== tabId);
 
+    const stats = countDiffStats(diff);
     const tab = {
       id: tabId,
       filename: tabTitle,
       fullPath: filePath,
       content: diff,
       type: 'diff',
+      diffStats: stats,
     };
     openTabs.push(tab);
     switchTab(tab.id);
@@ -2602,19 +2647,38 @@
     if (e.target === shortcutsOverlay) closeShortcuts();
   };
 
-  // Extend keyboard handler: ? shows shortcuts, Esc closes
+  // Extend keyboard handler: ? shows shortcuts, Ctrl+K opens palette, Esc closes
   document.addEventListener('keydown', (e) => {
+    // Ctrl+K — command palette (works from anywhere)
+    if (e.key === 'k' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (cpOverlay.classList.contains('hidden')) {
+        openCommandPalette();
+      } else {
+        closeCommandPalette();
+      }
+      return;
+    }
+
+    // Esc — close overlays
+    if (e.key === 'Escape') {
+      if (!cpOverlay.classList.contains('hidden')) {
+        closeCommandPalette();
+        e.stopPropagation();
+        return;
+      }
+      if (!shortcutsOverlay.classList.contains('hidden')) {
+        closeShortcuts();
+        e.stopPropagation();
+        return;
+      }
+    }
+
     // Don't trigger shortcuts when typing in inputs or terminals
     const tag = e.target.tagName;
     const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
     const inTerminal = terminalEl.contains(document.activeElement) ||
                        shellTerminalEl.contains(document.activeElement);
-
-    if (e.key === 'Escape' && !shortcutsOverlay.classList.contains('hidden')) {
-      closeShortcuts();
-      e.stopPropagation();
-      return;
-    }
 
     if (e.key === '?' && !inInput && !inTerminal) {
       e.preventDefault();
@@ -2622,8 +2686,273 @@
     }
   });
 
+  // --- Command palette ---
+
+  function openCommandPalette() {
+    cpInput.value = '';
+    cpSelectedIndex = -1;
+    cpOverlay.classList.remove('hidden');
+    cpInput.focus();
+    renderCommandPaletteResults('');
+  }
+
+  function closeCommandPalette() {
+    cpOverlay.classList.add('hidden');
+  }
+
+  cpOverlay.onclick = (e) => {
+    if (e.target === cpOverlay) closeCommandPalette();
+  };
+
+  function getCommandPaletteItems(query) {
+    const items = [];
+    const q = query.toLowerCase();
+
+    // Quick actions (always available)
+    const actions = [
+      { icon: '\u25B6', label: 'New Project', meta: 'action', action: () => { closeCommandPalette(); openModal(); } },
+    ];
+    if (activeSessionId) {
+      actions.push(
+        { icon: '\u2717', label: 'Interrupt Claude', meta: 'Ctrl+C', action: () => { closeCommandPalette(); statusInterrupt.click(); } },
+        { icon: '\u21BB', label: 'Compact Context', meta: '/compact', action: () => { closeCommandPalette(); statusCompact.click(); } },
+        { icon: '\u21BB', label: 'Refresh File Tree', meta: 'action', action: () => { closeCommandPalette(); renderFileTreeDir(fileTreeEl, '', 0); } },
+        { icon: '\u21BB', label: 'Refresh Git Status', meta: 'action', action: () => { closeCommandPalette(); refreshGitStatus(); } },
+      );
+    }
+
+    // Sessions
+    const sessionItems = sessions.map(s => {
+      const project = projects.find(p => p.id === s.projectId);
+      return {
+        icon: s.alive ? '\u25CF' : '\u25CB',
+        label: (project ? project.name + ' / ' : '') + (s.name || 'Untitled'),
+        meta: s.alive ? 'running' : 'exited',
+        action: () => { closeCommandPalette(); attachSession(s.id); },
+        group: 'sessions',
+      };
+    });
+
+    // Files from open tabs
+    const fileItems = openTabs.map(t => ({
+      icon: '\u2610',
+      label: t.filename,
+      meta: t.fullPath,
+      action: () => { closeCommandPalette(); switchTab(t.id); },
+      group: 'files',
+    }));
+
+    // Collect file tree entries recursively
+    const treeFiles = [];
+    function collectTreeFiles(container) {
+      const labels = container.querySelectorAll('.file-tree-item:not(.file-tree-folder) .file-tree-label');
+      labels.forEach(label => {
+        const path = label.title || label.textContent;
+        const name = label.textContent;
+        treeFiles.push({
+          icon: '\u2610',
+          label: name,
+          meta: path,
+          action: () => { closeCommandPalette(); openFileTab(path, name); },
+          group: 'files',
+        });
+      });
+    }
+    collectTreeFiles(fileTreeEl);
+
+    // Merge file items (open tabs + tree, deduped)
+    const seenPaths = new Set(fileItems.map(f => f.meta));
+    const allFiles = [...fileItems];
+    for (const tf of treeFiles) {
+      if (!seenPaths.has(tf.meta)) {
+        allFiles.push(tf);
+        seenPaths.add(tf.meta);
+      }
+    }
+
+    // Filter
+    const filtered = { actions: [], sessions: [], files: [] };
+
+    for (const a of actions) {
+      if (!q || a.label.toLowerCase().includes(q)) {
+        filtered.actions.push(a);
+      }
+    }
+    for (const s of sessionItems) {
+      if (!q || s.label.toLowerCase().includes(q)) {
+        filtered.sessions.push(s);
+      }
+    }
+    for (const f of allFiles) {
+      if (!q || f.label.toLowerCase().includes(q) || f.meta.toLowerCase().includes(q)) {
+        filtered.files.push(f);
+      }
+    }
+
+    // Limit files to 15
+    filtered.files = filtered.files.slice(0, 15);
+
+    return filtered;
+  }
+
+  function renderCommandPaletteResults(query) {
+    const filtered = getCommandPaletteItems(query);
+    cpResults.innerHTML = '';
+
+    const allItems = [];
+
+    function addGroup(label, items) {
+      if (items.length === 0) return;
+      const groupLabel = document.createElement('div');
+      groupLabel.className = 'cp-group-label';
+      groupLabel.textContent = label;
+      cpResults.appendChild(groupLabel);
+
+      for (const item of items) {
+        const el = document.createElement('div');
+        el.className = 'cp-item';
+        el.dataset.cpIndex = allItems.length;
+
+        const icon = document.createElement('span');
+        icon.className = 'cp-item-icon';
+        icon.textContent = item.icon;
+
+        const lbl = document.createElement('span');
+        lbl.className = 'cp-item-label';
+        // Highlight matching text
+        if (query) {
+          const idx = item.label.toLowerCase().indexOf(query.toLowerCase());
+          if (idx >= 0) {
+            lbl.innerHTML = escapeHtml(item.label.slice(0, idx)) +
+              '<span class="cp-item-highlight">' + escapeHtml(item.label.slice(idx, idx + query.length)) + '</span>' +
+              escapeHtml(item.label.slice(idx + query.length));
+          } else {
+            lbl.textContent = item.label;
+          }
+        } else {
+          lbl.textContent = item.label;
+        }
+
+        const meta = document.createElement('span');
+        meta.className = 'cp-item-meta';
+        meta.textContent = item.meta;
+
+        el.appendChild(icon);
+        el.appendChild(lbl);
+        el.appendChild(meta);
+
+        el.onclick = () => item.action();
+        el.onmouseenter = () => {
+          cpSelectedIndex = parseInt(el.dataset.cpIndex);
+          updateCpSelection();
+        };
+
+        cpResults.appendChild(el);
+        allItems.push({ el, action: item.action });
+      }
+    }
+
+    addGroup('Actions', filtered.actions);
+    addGroup('Sessions', filtered.sessions);
+    addGroup('Files', filtered.files);
+
+    if (allItems.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'cp-empty';
+      empty.textContent = 'No results found';
+      cpResults.appendChild(empty);
+    }
+
+    // Store for keyboard nav
+    cpResults._items = allItems;
+    cpSelectedIndex = allItems.length > 0 ? 0 : -1;
+    updateCpSelection();
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function updateCpSelection() {
+    const items = cpResults._items || [];
+    items.forEach((item, i) => {
+      item.el.classList.toggle('cp-selected', i === cpSelectedIndex);
+    });
+    // Scroll selected into view
+    if (cpSelectedIndex >= 0 && items[cpSelectedIndex]) {
+      items[cpSelectedIndex].el.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  cpInput.oninput = () => {
+    renderCommandPaletteResults(cpInput.value.trim());
+  };
+
+  cpInput.onkeydown = (e) => {
+    const items = cpResults._items || [];
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (items.length > 0) {
+        cpSelectedIndex = (cpSelectedIndex + 1) % items.length;
+        updateCpSelection();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (items.length > 0) {
+        cpSelectedIndex = (cpSelectedIndex - 1 + items.length) % items.length;
+        updateCpSelection();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (cpSelectedIndex >= 0 && items[cpSelectedIndex]) {
+        items[cpSelectedIndex].action();
+      }
+    } else if (e.key === 'Escape') {
+      closeCommandPalette();
+    }
+  };
+
+  // --- Scroll-to-bottom button ---
+
+  function updateScrollToBottomBtn() {
+    if (!activeSessionId || !term || activeTabId !== 'claude') {
+      scrollToBottomBtn.classList.add('hidden');
+      return;
+    }
+    if (isNearBottom(term)) {
+      scrollToBottomBtn.classList.add('hidden');
+    } else {
+      scrollToBottomBtn.classList.remove('hidden');
+    }
+  }
+
+  scrollToBottomBtn.onclick = () => {
+    if (term) {
+      term.scrollToBottom();
+      claudeSticky = true;
+      scrollToBottomBtn.classList.add('hidden');
+      term.focus();
+    }
+  };
+
+  // --- Live sidebar times ---
+
+  function startSidebarTimeUpdates() {
+    if (sidebarTimeTimer) return;
+    sidebarTimeTimer = setInterval(() => {
+      const timeEls = document.querySelectorAll('.session-time');
+      timeEls.forEach(el => {
+        const li = el.closest('li[data-session-id]');
+        if (!li) return;
+        const s = sessions.find(sess => sess.id === li.dataset.sessionId);
+        if (s) el.textContent = relativeTime(s.createdAt);
+      });
+    }, 30000);
+  }
+
   // --- Init ---
   initTerminal();
   initShellTerminal();
+  startSidebarTimeUpdates();
   connect();
 })();

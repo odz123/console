@@ -141,6 +141,20 @@
     </div>
   </div>
 
+  <!-- Command palette -->
+  <div id="command-palette-overlay" class="hidden">
+    <div id="command-palette">
+      <div class="cp-input-row">
+        <span class="cp-icon">&#10022;</span>
+        <input id="cp-input" type="text" placeholder="Search files, sessions, or actions..." autocomplete="off">
+      </div>
+      <div id="cp-results" class="cp-results"></div>
+    </div>
+  </div>
+
+  <!-- Scroll to bottom button -->
+  <button id="scroll-to-bottom" class="scroll-to-bottom hidden" title="Scroll to bottom">&#x25BC;</button>
+
   <!-- Keyboard shortcuts modal -->
   <div id="shortcuts-overlay" class="hidden">
     <div id="shortcuts-modal">
@@ -151,6 +165,7 @@
       <div class="shortcuts-body">
         <div class="shortcuts-section">
           <h3>Navigation</h3>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>K</kbd><span>Command palette</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Tab</kbd><span>Cycle tabs</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
           <div class="shortcut-row"><kbd>?</kbd><span>Show shortcuts</span></div>
