@@ -176,6 +176,47 @@ describe('Sessions API (scoped to projects)', () => {
     assert.strictEqual(res.status, 400);
   });
 
+  it('POST /api/projects/:id/sessions creates codex session with providerOptions', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'codex-full-auto',
+        provider: 'codex',
+        providerOptions: { approvalMode: 'full-auto', model: 'o4-mini' },
+      }),
+    });
+    assert.strictEqual(res.status, 201);
+    const session = await res.json();
+    assert.strictEqual(session.provider, 'codex');
+    assert.deepStrictEqual(session.providerOptions, { approvalMode: 'full-auto', model: 'o4-mini' });
+  });
+
+  it('POST /api/projects/:id/sessions rejects invalid approvalMode', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'bad-mode',
+        provider: 'codex',
+        providerOptions: { approvalMode: 'invalid-mode' },
+      }),
+    });
+    assert.strictEqual(res.status, 400);
+  });
+
+  it('POST /api/projects/:id/sessions accepts codex with no providerOptions', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'codex-default', provider: 'codex' }),
+    });
+    assert.strictEqual(res.status, 201);
+    const session = await res.json();
+    assert.strictEqual(session.provider, 'codex');
+    assert.strictEqual(session.providerOptions, null);
+  });
+
   it('POST /api/projects/:id/sessions returns 404 for unknown project', async () => {
     const res = await fetch(`${baseUrl}/api/projects/nonexistent/sessions`, {
       method: 'POST',

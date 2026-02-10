@@ -17,6 +17,10 @@ function rowToProject(row) {
 }
 
 function rowToSession(row) {
+  let providerOptions = null;
+  if (row.provider_options) {
+    try { providerOptions = JSON.parse(row.provider_options); } catch { /* ignore */ }
+  }
   return {
     id: row.id,
     projectId: row.project_id,
@@ -25,6 +29,7 @@ function rowToSession(row) {
     worktreePath: row.worktree_path,
     claudeSessionId: row.claude_session_id,
     provider: row.provider || 'claude',
+    providerOptions,
     status: row.status,
     createdAt: row.created_at,
   };
@@ -47,7 +52,7 @@ export function createStore(dbPath) {
   db.pragma('busy_timeout = 5000');
 
   // --- Schema versioning & migrations ---
-  const CURRENT_SCHEMA_VERSION = 2;
+  const CURRENT_SCHEMA_VERSION = 3;
 
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
   const versionRow = db.prepare('SELECT version FROM schema_version').get();
@@ -85,6 +90,12 @@ export function createStore(dbPath) {
     dbVersion = 2;
   }
 
+  // Migration 2 -> 3: add provider_options column for provider-specific config (JSON)
+  if (dbVersion < 3) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN provider_options TEXT`);
+    dbVersion = 3;
+  }
+
   // Upsert schema version
   if (!versionRow) {
     db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(CURRENT_SCHEMA_VERSION);
@@ -103,7 +114,7 @@ export function createStore(dbPath) {
     getAllSessions: db.prepare('SELECT * FROM sessions ORDER BY created_at ASC'),
     getSession: db.prepare('SELECT * FROM sessions WHERE id = ?'),
     insertSession: db.prepare(
-      'INSERT INTO sessions (id, project_id, name, branch_name, worktree_path, claude_session_id, provider, status, created_at) VALUES (@id, @projectId, @name, @branchName, @worktreePath, @claudeSessionId, @provider, @status, @createdAt)'
+      'INSERT INTO sessions (id, project_id, name, branch_name, worktree_path, claude_session_id, provider, provider_options, status, created_at) VALUES (@id, @projectId, @name, @branchName, @worktreePath, @claudeSessionId, @provider, @providerOptions, @status, @createdAt)'
     ),
     updateSession: db.prepare('UPDATE sessions SET status = @status, claude_session_id = @claudeSessionId WHERE id = @id'),
     renameSession: db.prepare('UPDATE sessions SET name = @name WHERE id = @id'),
@@ -142,7 +153,7 @@ export function createStore(dbPath) {
       return row ? rowToSession(row) : undefined;
     },
 
-    createSession({ id, projectId, name, branchName, worktreePath, claudeSessionId, provider, status, createdAt }) {
+    createSession({ id, projectId, name, branchName, worktreePath, claudeSessionId, provider, providerOptions, status, createdAt }) {
       stmts.insertSession.run({
         id,
         projectId,
@@ -151,6 +162,7 @@ export function createStore(dbPath) {
         worktreePath: worktreePath ?? null,
         claudeSessionId: claudeSessionId ?? null,
         provider: provider ?? 'claude',
+        providerOptions: providerOptions ? JSON.stringify(providerOptions) : null,
         status: status ?? 'running',
         createdAt,
       });
