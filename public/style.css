@@ -2463,6 +2463,696 @@ kbd {
   max-width: 200px;
 }
 
+/* --- Prompt input bar --- */
+
+.prompt-bar {
+  position: absolute;
+  bottom: 24px; /* above status bar */
+  left: 0;
+  right: 0;
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  background: #343230;
+  border-top: 1px solid #3d3a36;
+  z-index: 3;
+}
+.prompt-bar.hidden {
+  display: none;
+}
+
+.prompt-input {
+  flex: 1;
+  min-width: 0;
+  padding: 6px 10px;
+  background: #2b2a27;
+  border: 1px solid #3d3a36;
+  border-radius: 6px;
+  color: #f0ebe3;
+  font-size: 13px;
+  font-family: inherit;
+  line-height: 1.4;
+  resize: none;
+  outline: none;
+  max-height: 120px;
+  overflow-y: auto;
+}
+.prompt-input:focus {
+  border-color: #d97757;
+}
+.prompt-input::placeholder {
+  color: #8c8478;
+}
+
+.prompt-send {
+  padding: 6px 16px;
+  background: #d97757;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  flex-shrink: 0;
+  align-self: flex-end;
+  line-height: 1.4;
+}
+.prompt-send:hover {
+  background: #c4653f;
+}
+
+/* --- Active status button indicator --- */
+
+.status-btn-active {
+  background: #d97757;
+  color: #fff;
+}
+.status-btn-active:hover {
+  background: #c4653f;
+}
+
+/* --- Light theme --- */
+
+body.light-theme {
+  background: #f5f2ee;
+  color: #3d3a36;
+}
+
+body.light-theme #app {
+  background: #f5f2ee;
+}
+
+body.light-theme #sidebar {
+  background: #eae6e0;
+  border-right-color: #d9d1c7;
+}
+
+body.light-theme #sidebar-header {
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .sidebar-title {
+  color: #8c8478;
+}
+
+body.light-theme #btn-add-project {
+  background: #d9d1c7;
+  color: #3d3a36;
+}
+
+body.light-theme #btn-add-project:hover {
+  background: #d97757;
+  color: #fff;
+}
+
+body.light-theme .project-header:hover,
+body.light-theme .project-sessions li:hover {
+  background: #d9d1c7;
+}
+
+body.light-theme .project-sessions li.active {
+  background: #d9d1c7;
+  border-left-color: #d97757;
+}
+
+body.light-theme .session-name {
+  color: #3d3a36;
+}
+
+body.light-theme .status-dot.exited {
+  background: #b8b0a4;
+}
+
+body.light-theme #sidebar-filter,
+body.light-theme .inline-session-input,
+body.light-theme .inline-provider-select,
+body.light-theme #file-tree-filter {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+  color: #3d3a36;
+}
+
+body.light-theme #sidebar-filter:focus,
+body.light-theme .inline-session-input:focus,
+body.light-theme .inline-provider-select:focus,
+body.light-theme #file-tree-filter:focus {
+  border-color: #d97757;
+}
+
+body.light-theme .provider-toggle {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+  color: #8c8478;
+}
+
+body.light-theme .provider-toggle.active {
+  background: #d9d1c7;
+  color: #3d3a36;
+}
+
+body.light-theme #sidebar-divider {
+  background: #d9d1c7;
+}
+
+body.light-theme #sidebar-divider:hover {
+  background: #d97757;
+}
+
+body.light-theme #terminal-container {
+  background: #f5f2ee;
+}
+
+body.light-theme #no-session {
+  background: #f5f2ee;
+}
+
+body.light-theme .landing-title {
+  color: #3d3a36;
+}
+
+body.light-theme .landing-subtitle,
+body.light-theme .landing-hint,
+body.light-theme .landing-recent-header {
+  color: #8c8478;
+}
+
+body.light-theme .landing-recent-list {
+  border-color: #d9d1c7;
+}
+
+body.light-theme .landing-recent-item {
+  color: #3d3a36;
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .landing-recent-item:hover {
+  background: #eae6e0;
+}
+
+body.light-theme #status-bar {
+  background: #eae6e0;
+  border-top-color: #d9d1c7;
+}
+
+body.light-theme .status-item {
+  color: #6a6358;
+}
+
+body.light-theme .status-sep {
+  color: #d9d1c7;
+}
+
+body.light-theme .status-btn {
+  background: #d9d1c7;
+  color: #6a6358;
+}
+
+body.light-theme .status-btn:hover {
+  background: #d97757;
+  color: #fff;
+}
+
+body.light-theme .status-btn-active {
+  background: #d97757;
+  color: #fff;
+}
+
+body.light-theme .status-btn-restart {
+  background: #d97757;
+  color: #fff;
+}
+
+body.light-theme #breadcrumb-bar {
+  background: #eae6e0;
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .breadcrumb-segment {
+  color: #8c8478;
+}
+
+body.light-theme .breadcrumb-active {
+  color: #3d3a36;
+}
+
+body.light-theme .breadcrumb-divider {
+  color: #d9d1c7;
+}
+
+body.light-theme #tab-bar {
+  background: #eae6e0;
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .tab {
+  color: #8c8478;
+}
+
+body.light-theme .tab:hover {
+  background: #d9d1c7;
+}
+
+body.light-theme .tab.active {
+  color: #3d3a36;
+  border-bottom-color: #d97757;
+  background: #f5f2ee;
+}
+
+body.light-theme .tab-close:hover {
+  color: #d97757;
+}
+
+body.light-theme #right-panel {
+  background: #eae6e0;
+  border-left-color: #d9d1c7;
+}
+
+body.light-theme .right-panel-header {
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .rp-tab {
+  color: #8c8478;
+}
+
+body.light-theme .rp-tab.active {
+  color: #d97757;
+  border-bottom-color: #d97757;
+}
+
+body.light-theme .file-tree-item:hover {
+  background: #d9d1c7;
+}
+
+body.light-theme .file-tree-label {
+  color: #3d3a36;
+}
+
+body.light-theme .file-tree-arrow {
+  color: #8c8478;
+}
+
+body.light-theme .file-tree-loading {
+  color: #8c8478;
+}
+
+body.light-theme .git-branch-bar {
+  background: #d9d1c7;
+  border-bottom-color: #ccc4b8;
+}
+
+body.light-theme .git-commit-form {
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .git-commit-form input {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+  color: #3d3a36;
+}
+
+body.light-theme .git-section-header {
+  background: #eae6e0;
+}
+
+body.light-theme .git-file-row:hover {
+  background: #d9d1c7;
+}
+
+body.light-theme .git-file-name {
+  color: #3d3a36;
+}
+
+body.light-theme .git-log-header {
+  background: #eae6e0;
+}
+
+body.light-theme .git-log-row:hover {
+  background: #d9d1c7;
+}
+
+body.light-theme .git-log-msg {
+  color: #3d3a36;
+}
+
+body.light-theme #right-panel-divider {
+  background: #d9d1c7;
+}
+
+body.light-theme #right-panel-divider:hover {
+  background: #d97757;
+}
+
+body.light-theme #file-viewer-toolbar {
+  background: #eae6e0;
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .fv-btn {
+  background: #d9d1c7;
+  color: #6a6358;
+}
+
+body.light-theme .fv-btn:hover {
+  background: #ccc4b8;
+}
+
+body.light-theme #file-viewer-content {
+  background: #f5f2ee;
+  color: #3d3a36;
+}
+
+body.light-theme #file-viewer-content.plain-text {
+  color: #3d3a36;
+}
+
+body.light-theme .line-num {
+  color: #b8b0a4;
+  border-right-color: #d9d1c7;
+}
+
+body.light-theme .line-num:hover {
+  color: #d97757;
+}
+
+body.light-theme .line-row.line-highlighted {
+  background: rgba(217, 119, 87, 0.12);
+}
+
+body.light-theme #file-viewer-content.markdown-body {
+  color: #3d3a36;
+}
+
+body.light-theme #file-viewer-content.markdown-body code {
+  background: #eae6e0;
+  color: #c4653f;
+}
+
+body.light-theme #file-viewer-content.markdown-body pre {
+  background: #eae6e0;
+  border-color: #d9d1c7;
+}
+
+body.light-theme #file-viewer-content.markdown-body pre code {
+  color: #3d3a36;
+}
+
+body.light-theme #file-viewer-content.markdown-body h1,
+body.light-theme #file-viewer-content.markdown-body h2,
+body.light-theme #file-viewer-content.markdown-body h3 {
+  color: #3d3a36;
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme #file-viewer-content.markdown-body blockquote {
+  border-left-color: #d97757;
+  color: #6a6358;
+}
+
+body.light-theme #file-viewer-content.markdown-body a {
+  color: #c4653f;
+}
+
+body.light-theme .fv-editor {
+  background: #f5f2ee;
+  color: #3d3a36;
+}
+
+body.light-theme .fv-editor:focus {
+  background: #faf8f5;
+}
+
+body.light-theme .diff-add {
+  background: rgba(90, 143, 74, 0.12);
+  color: #5a8f4a;
+}
+
+body.light-theme .diff-del {
+  background: rgba(201, 64, 64, 0.12);
+  color: #c94040;
+}
+
+body.light-theme .diff-hunk {
+  color: #a88f40;
+  background: rgba(168, 143, 64, 0.08);
+}
+
+body.light-theme .diff-header {
+  color: #b8b0a4;
+}
+
+body.light-theme .diff-split-col {
+  border-right-color: #d9d1c7;
+}
+
+body.light-theme .fv-search-bar {
+  background: #eae6e0;
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme #fv-search-input {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+  color: #3d3a36;
+}
+
+body.light-theme .toast {
+  background: #eae6e0;
+  color: #3d3a36;
+  border-color: #d9d1c7;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.12);
+}
+
+body.light-theme .toast-error {
+  border-left-color: #c94040;
+}
+
+body.light-theme .toast-success {
+  border-left-color: #5a8f4a;
+}
+
+body.light-theme .toast-warning {
+  border-left-color: #a88f40;
+}
+
+body.light-theme .confirm-overlay {
+  background: rgba(0, 0, 0, 0.3);
+}
+
+body.light-theme .confirm-dialog {
+  background: #eae6e0;
+  border-color: #d9d1c7;
+}
+
+body.light-theme .confirm-dialog h3 {
+  color: #3d3a36;
+}
+
+body.light-theme .confirm-dialog p {
+  color: #6a6358;
+}
+
+body.light-theme .confirm-cancel {
+  background: #d9d1c7;
+  color: #3d3a36;
+}
+
+body.light-theme #modal {
+  background: #eae6e0;
+  border-color: #d9d1c7;
+}
+
+body.light-theme #modal h2 {
+  color: #3d3a36;
+}
+
+body.light-theme #modal label {
+  color: #6a6358;
+}
+
+body.light-theme #modal input {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+  color: #3d3a36;
+}
+
+body.light-theme #command-palette {
+  background: #eae6e0;
+  border-color: #d9d1c7;
+}
+
+body.light-theme #cp-input {
+  color: #3d3a36;
+}
+
+body.light-theme .cp-item:hover,
+body.light-theme .cp-item.cp-selected {
+  background: #d9d1c7;
+}
+
+body.light-theme .cp-item-label {
+  color: #3d3a36;
+}
+
+body.light-theme .cp-group-label {
+  color: #8c8478;
+}
+
+body.light-theme #shortcuts-modal {
+  background: #eae6e0;
+  border-color: #d9d1c7;
+}
+
+body.light-theme .shortcuts-header {
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .shortcuts-header h2 {
+  color: #3d3a36;
+}
+
+body.light-theme .shortcut-row {
+  color: #3d3a36;
+}
+
+body.light-theme kbd {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+  color: #3d3a36;
+}
+
+body.light-theme .scroll-to-bottom {
+  background: #eae6e0;
+  border-color: #d9d1c7;
+  color: #8c8478;
+}
+
+body.light-theme .scroll-to-bottom:hover {
+  background: #d97757;
+  color: #fff;
+}
+
+body.light-theme .session-info-popover {
+  background: #eae6e0;
+  border-color: #d9d1c7;
+}
+
+body.light-theme .sip-value {
+  color: #3d3a36;
+}
+
+body.light-theme .sip-cli {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+}
+
+body.light-theme .context-menu {
+  background: #eae6e0;
+  border-color: #d9d1c7;
+}
+
+body.light-theme .context-menu-item {
+  color: #3d3a36;
+}
+
+body.light-theme .context-menu-item:hover {
+  background: #d9d1c7;
+}
+
+body.light-theme .context-menu-sep {
+  background: #d9d1c7;
+}
+
+body.light-theme .prompt-bar {
+  background: #eae6e0;
+  border-top-color: #d9d1c7;
+}
+
+body.light-theme .prompt-input {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+  color: #3d3a36;
+}
+
+body.light-theme .prompt-input:focus {
+  border-color: #d97757;
+}
+
+body.light-theme .prompt-input::placeholder {
+  color: #b8b0a4;
+}
+
+body.light-theme .project-group {
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .project-delete {
+  color: #b8b0a4;
+}
+
+body.light-theme .project-delete:hover {
+  color: #d97757;
+}
+
+body.light-theme .session-actions button {
+  color: #b8b0a4;
+}
+
+body.light-theme .session-actions button:hover {
+  color: #d97757;
+}
+
+body.light-theme .session-time {
+  color: #b8b0a4;
+}
+
+body.light-theme .branch-badge {
+  background: #d9d1c7;
+  color: #6a6358;
+}
+
+body.light-theme .provider-badge {
+  background: #d9d1c7;
+  color: #6a6358;
+}
+
+body.light-theme .file-tree-git-badge {
+  background: #d9d1c7;
+}
+
+body.light-theme .breadcrumb-rename-input {
+  background: #f5f2ee;
+  color: #3d3a36;
+}
+
+body.light-theme #dir-browser {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+}
+
+body.light-theme #dir-list li:hover {
+  background: #eae6e0;
+}
+
+body.light-theme .progress-bar::after {
+  background: linear-gradient(90deg, transparent, #d97757, transparent);
+}
+
+body.light-theme #mobile-header {
+  background: #eae6e0;
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme #mobile-title {
+  color: #3d3a36;
+}
+
+body.light-theme #btn-mobile-sidebar,
+body.light-theme #btn-mobile-panel {
+  color: #3d3a36;
+}
+
 /* --- Mobile header (hidden on desktop) --- */
 
 #mobile-header {

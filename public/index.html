@@ -75,6 +75,10 @@
           </div>
         </div>
       </div>
+      <div id="prompt-bar" class="prompt-bar hidden">
+        <textarea id="prompt-input" class="prompt-input" rows="1" placeholder="Type a message..." autocomplete="off"></textarea>
+        <button id="prompt-send" class="prompt-send" title="Send (Enter)">Send</button>
+      </div>
       <div id="status-bar" class="hidden">
         <div class="status-bar-left">
           <span id="status-provider" class="status-item status-provider-badge"></span>
@@ -91,6 +95,9 @@
           <span class="status-sep">|</span>
           <span id="status-connection" class="status-item"></span>
           <span class="status-sep status-sep-controls">|</span>
+          <button id="status-notify" class="status-btn" title="Toggle browser notifications">Notify</button>
+          <button id="status-theme" class="status-btn" title="Toggle light/dark theme">Theme</button>
+          <button id="status-export" class="status-btn" title="Export session output">Export</button>
           <button id="status-interrupt" class="status-btn" title="Send interrupt (Ctrl+C)">Interrupt</button>
           <button id="status-compact" class="status-btn" title="Send /compact to reduce context">Compact</button>
           <button id="status-restart" class="status-btn status-btn-restart hidden" title="Restart session">Restart</button>
@@ -208,6 +215,9 @@
           <h3>Session</h3>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>C</kbd><span>Interrupt Claude</span></div>
           <div class="shortcut-row"><kbd>Esc</kbd><span>Close modal / dialog</span></div>
+          <div class="shortcut-row">Prompt bar<span>Type messages, Enter to send</span></div>
+          <div class="shortcut-row">Shift+Enter<span>Newline in prompt bar</span></div>
+          <div class="shortcut-row">Status bar<span>Export, Theme, Notifications</span></div>
         </div>
         <div class="shortcuts-section">
           <h3>Tabs</h3>

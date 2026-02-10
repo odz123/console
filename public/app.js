@@ -148,6 +148,14 @@
   const statusRestart = document.getElementById('status-restart');
   const statusCopyCli = document.getElementById('status-copy-cli');
 
+  // New feature refs
+  const statusNotify = document.getElementById('status-notify');
+  const statusTheme = document.getElementById('status-theme');
+  const statusExport = document.getElementById('status-export');
+  const promptBar = document.getElementById('prompt-bar');
+  const promptInput = document.getElementById('prompt-input');
+  const promptSend = document.getElementById('prompt-send');
+
   // Notification dot state
   let gitChangesPending = false;
 
@@ -168,6 +176,23 @@
   // Git status cache for file tree change indicators
   let gitFileStatusMap = new Map(); // filePath -> status letter (M, A, D, ?, etc.)
 
+  // Browser notifications state
+  let notificationsEnabled = false;
+  let notificationPermission = typeof Notification !== 'undefined' ? Notification.permission : 'denied';
+
+  // Theme state
+  let currentTheme = 'dark';
+  try {
+    const saved = localStorage.getItem('claude-console-theme');
+    if (saved === 'light') currentTheme = 'light';
+  } catch {}
+  if (currentTheme === 'light') document.body.classList.add('light-theme');
+
+  // Check/restore notification preference
+  try {
+    notificationsEnabled = localStorage.getItem('claude-console-notifications') === 'true';
+  } catch {}
+
   // Terminal font size zoom
   const statusFontSize = document.getElementById('status-font-size');
   const statusChanges = document.getElementById('status-changes');
@@ -181,6 +206,134 @@
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(data);
     }
+  }
+
+  // --- Browser notifications ---
+  function requestNotificationPermission() {
+    if (typeof Notification === 'undefined') return;
+    if (Notification.permission === 'granted') {
+      notificationsEnabled = true;
+      try { localStorage.setItem('claude-console-notifications', 'true'); } catch {}
+      return;
+    }
+    if (Notification.permission !== 'denied') {
+      Notification.requestPermission().then(permission => {
+        notificationPermission = permission;
+        notificationsEnabled = permission === 'granted';
+        try { localStorage.setItem('claude-console-notifications', String(notificationsEnabled)); } catch {}
+      });
+    }
+  }
+
+  function sendBrowserNotification(title, body) {
+    if (!notificationsEnabled || typeof Notification === 'undefined') return;
+    if (Notification.permission !== 'granted') return;
+    if (document.hasFocus()) return; // Don't notify if tab is focused
+    try {
+      const n = new Notification(title, {
+        body,
+        icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="80" font-size="80">✦</text></svg>',
+        tag: 'claude-console-idle',
+      });
+      n.onclick = () => { window.focus(); n.close(); };
+      setTimeout(() => n.close(), 8000);
+    } catch {}
+  }
+
+  function toggleNotifications() {
+    if (!notificationsEnabled) {
+      requestNotificationPermission();
+    } else {
+      notificationsEnabled = false;
+      try { localStorage.setItem('claude-console-notifications', 'false'); } catch {}
+    }
+  }
+
+  // --- Theme toggle ---
+  function toggleTheme() {
+    currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    document.body.classList.toggle('light-theme', currentTheme === 'light');
+    try { localStorage.setItem('claude-console-theme', currentTheme); } catch {}
+
+    // Update terminal themes
+    const lightTermTheme = {
+      background: '#f5f2ee',
+      foreground: '#3d3a36',
+      cursor: '#d97757',
+      cursorAccent: '#f5f2ee',
+      selectionBackground: '#d9d1c7',
+      black: '#3d3a36',
+      red: '#c94040',
+      green: '#5a8f4a',
+      yellow: '#a88f40',
+      blue: '#4a7fa0',
+      magenta: '#a05a7a',
+      cyan: '#5a9a8a',
+      white: '#f5f2ee',
+      brightBlack: '#8c8478',
+      brightRed: '#d95555',
+      brightGreen: '#6aa05a',
+      brightYellow: '#b89f50',
+      brightBlue: '#5a8fb0',
+      brightMagenta: '#b06a8a',
+      brightCyan: '#6aaa9a',
+      brightWhite: '#2b2a27',
+    };
+    const darkTermTheme = {
+      background: '#2b2a27',
+      foreground: '#e8dfd5',
+      cursor: '#d97757',
+      cursorAccent: '#2b2a27',
+      selectionBackground: '#4a4540',
+      black: '#2b2a27',
+      red: '#d95555',
+      green: '#7cba6a',
+      yellow: '#d4b87a',
+      blue: '#7aadca',
+      magenta: '#c97a9c',
+      cyan: '#88c8b8',
+      white: '#e8dfd5',
+      brightBlack: '#8c8478',
+      brightRed: '#e06666',
+      brightGreen: '#8ece7e',
+      brightYellow: '#e0c88e',
+      brightBlue: '#8ebdd0',
+      brightMagenta: '#d98eb0',
+      brightCyan: '#9ed0c4',
+      brightWhite: '#fff8f0',
+    };
+    const newTheme = currentTheme === 'light' ? lightTermTheme : darkTermTheme;
+    if (term) term.options.theme = newTheme;
+    if (shellTerm) shellTerm.options.theme = newTheme;
+  }
+
+  // --- Session output export ---
+  function exportSessionOutput() {
+    if (!term || !activeSessionId) return;
+    const session = sessions.find(s => s.id === activeSessionId);
+    const name = session ? session.name : 'session';
+
+    // Extract text from terminal buffer
+    const buf = term.buffer.active;
+    const lines = [];
+    for (let i = 0; i <= buf.length - 1; i++) {
+      const line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    // Trim trailing empty lines
+    while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
+
+    const text = lines.join('\n');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name.replace(/[^a-zA-Z0-9_-]/g, '_')}_output.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Session output exported', 'success', 2000);
   }
 
   function debounce(fn, ms) {
@@ -310,6 +463,26 @@
     const termWrapper = document.getElementById('terminal-wrapper');
     if (termWrapper && termWrapper.style.display !== 'none') {
       termWrapper.style.inset = `${getTopInset()} 0 24px 0`;
+    }
+
+    // Update notify button state
+    if (statusNotify) {
+      statusNotify.classList.toggle('status-btn-active', notificationsEnabled);
+      statusNotify.title = notificationsEnabled ? 'Notifications on — click to disable' : 'Enable browser notifications';
+    }
+
+    // Update theme button label
+    if (statusTheme) {
+      statusTheme.textContent = currentTheme === 'dark' ? 'Light' : 'Dark';
+    }
+
+    // Show prompt bar when session is active and on Claude tab
+    if (promptBar) {
+      if (activeTabId === 'claude' && alive) {
+        promptBar.classList.remove('hidden');
+      } else {
+        promptBar.classList.add('hidden');
+      }
     }
 
     // Start duration timer if not running
@@ -821,6 +994,14 @@
               // Show notification dot on Git tab
               setGitTabBadge(true);
             }
+            // Auto-refresh open file tabs
+            refreshOpenFileTabs();
+            // Browser notification
+            const idleSession = sessions.find(s => s.id === sessionId);
+            sendBrowserNotification(
+              'Claude finished',
+              idleSession ? `Session "${idleSession.name}" is now idle` : 'Session is now idle'
+            );
           }
           break;
         }
@@ -1878,7 +2059,9 @@
   }
 
   function getBottomInset() {
-    return statusBar && !statusBar.classList.contains('hidden') ? '24px' : '0';
+    const statusH = statusBar && !statusBar.classList.contains('hidden') ? 24 : 0;
+    const promptH = promptBar && !promptBar.classList.contains('hidden') ? promptBar.offsetHeight : 0;
+    return (statusH + promptH) + 'px';
   }
 
   function switchTab(tabId) {
@@ -1892,8 +2075,17 @@
     if (tabId === 'claude') {
       // Show terminal, hide file viewer
       termWrapper.style.display = '';
-      termWrapper.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
       fileViewer.classList.add('hidden');
+      // Show prompt bar for Claude tab
+      if (promptBar) {
+        const session = sessions.find(s => s.id === activeSessionId);
+        if (session && session.alive !== false) {
+          promptBar.classList.remove('hidden');
+        } else {
+          promptBar.classList.add('hidden');
+        }
+      }
+      termWrapper.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
       updateScrollToBottomBtn();
       term.focus();
       // Refit terminal synchronously so term.cols/rows are correct before
@@ -1901,9 +2093,10 @@
       // Reading clientWidth/clientHeight forces a reflow after the inset change.
       if (fitAddon) fitAddon.fit();
     } else {
-      // Show file viewer, hide terminal
+      // Show file viewer, hide terminal, hide prompt bar
       termWrapper.style.display = 'none';
       fileViewer.classList.remove('hidden');
+      if (promptBar) promptBar.classList.add('hidden');
       fileViewer.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
       scrollToBottomBtn.classList.add('hidden');
 
@@ -2054,6 +2247,26 @@
     if (tab) {
       openTabs.push(tab);
       switchTab(tab.id);
+    }
+  }
+
+  // --- Auto-refresh open file tabs ---
+  async function refreshOpenFileTabs() {
+    if (!activeSessionId || openTabs.length === 0) return;
+    for (const tab of openTabs) {
+      if (tab.type === 'binary' || tab.type === 'diff') continue;
+      try {
+        const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(tab.fullPath)}`);
+        if (!res.ok) continue;
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) continue; // binary
+        const newContent = await res.text();
+        if (newContent !== tab.content) {
+          tab.content = newContent;
+          // Re-render if this tab is currently visible
+          if (activeTabId === tab.id) renderFileContent(tab);
+        }
+      } catch { /* silently skip */ }
     }
   }
 
@@ -3248,6 +3461,85 @@
     term.focus();
   };
 
+  // --- New feature button handlers ---
+
+  if (statusNotify) {
+    statusNotify.onclick = toggleNotifications;
+  }
+
+  if (statusTheme) {
+    statusTheme.onclick = toggleTheme;
+  }
+
+  if (statusExport) {
+    statusExport.onclick = exportSessionOutput;
+  }
+
+  // --- Prompt input bar ---
+
+  function showPromptBar() {
+    if (!activeSessionId) return;
+    promptBar.classList.remove('hidden');
+    // Adjust terminal wrapper bottom inset
+    const termWrapper = document.getElementById('terminal-wrapper');
+    if (termWrapper && termWrapper.style.display !== 'none') {
+      termWrapper.style.inset = `${getTopInset()} 0 ${getPromptBottomInset()} 0`;
+      if (fitAddon) fitAddon.fit();
+    }
+  }
+
+  function hidePromptBar() {
+    promptBar.classList.add('hidden');
+  }
+
+  function getPromptBottomInset() {
+    const statusH = statusBar && !statusBar.classList.contains('hidden') ? 24 : 0;
+    const promptH = promptBar && !promptBar.classList.contains('hidden') ? promptBar.offsetHeight : 0;
+    return (statusH + promptH) + 'px';
+  }
+
+  function sendPromptInput() {
+    if (!activeSessionId) return;
+    const text = promptInput.value;
+    if (!text) return;
+    // Send text to terminal followed by Enter
+    wsSend(JSON.stringify({ type: 'input', data: text + '\r' }));
+    promptInput.value = '';
+    promptInput.style.height = 'auto';
+    term.focus();
+  }
+
+  if (promptSend) {
+    promptSend.onclick = sendPromptInput;
+  }
+
+  if (promptInput) {
+    // Auto-grow textarea
+    promptInput.oninput = () => {
+      promptInput.style.height = 'auto';
+      promptInput.style.height = Math.min(promptInput.scrollHeight, 120) + 'px';
+      // Re-adjust terminal inset
+      const termWrapper = document.getElementById('terminal-wrapper');
+      if (termWrapper && termWrapper.style.display !== 'none') {
+        termWrapper.style.inset = `${getTopInset()} 0 ${getPromptBottomInset()} 0`;
+        if (fitAddon) fitAddon.fit();
+      }
+    };
+
+    promptInput.onkeydown = (e) => {
+      // Enter sends, Shift+Enter for newline
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendPromptInput();
+      }
+      // Escape focuses terminal
+      if (e.key === 'Escape') {
+        promptInput.blur();
+        term.focus();
+      }
+    };
+  }
+
   // --- File tree filter ---
 
   fileTreeFilter.oninput = debounce(() => {
@@ -3473,6 +3765,9 @@
         { icon: '\u25A3', label: 'Toggle Sidebar', meta: 'Ctrl+B', action: () => { closeCommandPalette(); toggleMiniSidebar(); } },
         { icon: '\u25A3', label: 'Toggle Focus Mode', meta: 'Ctrl+\\', action: () => { closeCommandPalette(); toggleFocusMode(); } },
         { icon: '\u2717', label: 'Close All Tabs', meta: 'action', action: () => { closeCommandPalette(); closeAllTabs(); } },
+        { icon: '\u25CB', label: 'Toggle Theme', meta: 'light/dark', action: () => { closeCommandPalette(); toggleTheme(); } },
+        { icon: '\u21E9', label: 'Export Session Output', meta: 'download .txt', action: () => { closeCommandPalette(); exportSessionOutput(); } },
+        { icon: '\u266A', label: 'Toggle Notifications', meta: notificationsEnabled ? 'on' : 'off', action: () => { closeCommandPalette(); toggleNotifications(); } },
       );
     }
 
