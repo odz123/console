@@ -809,17 +809,27 @@
     input.type = 'text';
     input.placeholder = 'Session name...';
 
-    const providerSelect = document.createElement('select');
-    providerSelect.className = 'inline-provider-select';
+    const providerToggle = document.createElement('div');
+    providerToggle.className = 'provider-toggle-group';
+    let selectedProvider = 'claude';
+
     for (const p of ['claude', 'codex']) {
-      const opt = document.createElement('option');
-      opt.value = p;
-      opt.textContent = p.charAt(0).toUpperCase() + p.slice(1);
-      providerSelect.appendChild(opt);
+      const btn = document.createElement('button');
+      btn.type = 'button';
+      btn.className = 'provider-toggle' + (p === 'claude' ? ' active' : '');
+      btn.textContent = p.charAt(0).toUpperCase() + p.slice(1);
+      btn.dataset.provider = p;
+      btn.onclick = (e) => {
+        e.stopPropagation();
+        selectedProvider = p;
+        providerToggle.querySelectorAll('.provider-toggle').forEach(b => b.classList.toggle('active', b.dataset.provider === p));
+        codexRow.classList.toggle('hidden', p !== 'codex');
+      };
+      providerToggle.appendChild(btn);
     }
 
     topRow.appendChild(input);
-    topRow.appendChild(providerSelect);
+    topRow.appendChild(providerToggle);
     form.appendChild(topRow);
 
     // Codex-specific options row (hidden by default)
@@ -846,11 +856,6 @@
     codexRow.appendChild(modelInput);
     form.appendChild(codexRow);
 
-    // Toggle codex options visibility based on provider selection
-    providerSelect.onchange = () => {
-      codexRow.classList.toggle('hidden', providerSelect.value !== 'codex');
-    };
-
     ul.insertBefore(form, ul.lastElementChild);
     input.focus();
 
@@ -858,12 +863,12 @@
       const name = input.value.trim();
       if (!name) return;
       input.disabled = true;
-      providerSelect.disabled = true;
+      providerToggle.querySelectorAll('.provider-toggle').forEach(b => b.disabled = true);
       modeSelect.disabled = true;
       modelInput.disabled = true;
 
       let providerOptions = undefined;
-      if (providerSelect.value === 'codex') {
+      if (selectedProvider === 'codex') {
         providerOptions = {};
         if (modeSelect.value !== 'suggest') {
           providerOptions.approvalMode = modeSelect.value;
@@ -876,7 +881,7 @@
         if (Object.keys(providerOptions).length === 0) providerOptions = undefined;
       }
 
-      await createSession(projectId, name, providerSelect.value, providerOptions);
+      await createSession(projectId, name, selectedProvider, providerOptions);
       form.remove();
     };
 
@@ -893,7 +898,7 @@
     };
 
     input.onkeydown = handleKeydown;
-    providerSelect.onkeydown = handleSelectKeydown;
+    providerToggle.querySelectorAll('.provider-toggle').forEach(b => b.onkeydown = handleSelectKeydown);
     modeSelect.onkeydown = handleSelectKeydown;
     modelInput.onkeydown = handleKeydown;
 
@@ -905,7 +910,7 @@
     };
 
     input.onblur = handleBlur;
-    providerSelect.onblur = handleBlur;
+    providerToggle.querySelectorAll('.provider-toggle').forEach(b => b.onblur = handleBlur);
     modeSelect.onblur = handleBlur;
     modelInput.onblur = handleBlur;
   }
