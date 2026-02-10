@@ -30,6 +30,10 @@ class PtyProcess extends EventEmitter {
       this._clearIdleTimer();
       this.alive = false;
       this.emit('exit', exitCode);
+      // Remove all listeners after exit handlers have run to prevent
+      // memory leaks from captured closures (WebSocket refs, etc.).
+      // Buffer is preserved for replay; only listeners are cleaned up.
+      this.removeAllListeners();
     };
 
     this.pty.onData(this._onPtyData);

@@ -487,7 +487,7 @@ export function createServer({ testMode = false } = {}) {
       }
 
       // Get porcelain status
-      const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-uall'], gitOpts(cwd));
+      const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-unormal'], gitOpts(cwd));
 
       const staged = [];
       const unstaged = [];
@@ -1580,12 +1580,11 @@ export function createServer({ testMode = false } = {}) {
 
         case 'shell-attach': {
           const { sessionId, cols, rows } = msg;
-          console.log('[shell-attach] sessionId:', sessionId, 'cols:', cols, 'rows:', rows);
           const session = store.getSession(sessionId);
-          if (!session) { console.log('[shell-attach] session not found'); break; }
+          if (!session) break;
 
           const project = store.getProject(session.projectId);
-          if (!project) { console.log('[shell-attach] project not found'); break; }
+          if (!project) break;
 
           // Resolve worktree path BEFORE detaching the old listener so that
           // on error the previous shell connection remains intact.
@@ -1594,9 +1593,7 @@ export function createServer({ testMode = false } = {}) {
             if (session.worktreePath) {
               try {
                 cwd = await resolveWorktreePath(project.cwd, session.worktreePath);
-                console.log('[shell-attach] resolved cwd:', cwd);
-              } catch (e) {
-                console.log('[shell-attach] resolveWorktreePath FAILED:', e.message);
+              } catch {
                 break;
               }
             }
@@ -1609,7 +1606,6 @@ export function createServer({ testMode = false } = {}) {
             }
             attachedShellSessionId = sessionId;
 
-            console.log('[shell-attach] spawning shell in:', cwd);
             manager.spawnShell(sessionId, { cwd, cols, rows });
           } else {
             // Detach previous shell listener
@@ -1792,10 +1788,19 @@ export function createServer({ testMode = false } = {}) {
           .sort((a, b) => b.mtime - a.mtime); // most recently modified conversation first
 
         if (jsonlFiles.length > 0) {
-          const latestId = jsonlFiles[0].name.replace('.jsonl', '');
-          if (latestId !== session.claudeSessionId || session.status === 'exited') {
-            store.updateSession(session.id, { claudeSessionId: latestId, status: 'running' });
-            console.log(`[startup] Updated claude session ID for ${session.name}: ${latestId}${session.claudeSessionId ? ` (was ${session.claudeSessionId})` : ' (was null)'}${session.status === 'exited' ? ' (revived)' : ''}`);
+          // Prefer the session's stored ID if it still exists on disk (non-stub).
+          // Falling back to the latest JSONL only when the stored ID is missing or
+          // was never captured.  This prevents multiple sessions sharing the same
+          // project CWD from all being reassigned to the single newest file.
+          const storedExists = session.claudeSessionId &&
+            jsonlFiles.some(f => f.name === session.claudeSessionId + '.jsonl');
+          const resolvedId = storedExists
+            ? session.claudeSessionId
+            : jsonlFiles[0].name.replace('.jsonl', '');
+
+          if (resolvedId !== session.claudeSessionId || session.status === 'exited') {
+            store.updateSession(session.id, { claudeSessionId: resolvedId, status: 'running' });
+            console.log(`[startup] Updated claude session ID for ${session.name}: ${resolvedId}${session.claudeSessionId ? ` (was ${session.claudeSessionId})` : ' (was null)'}${session.status === 'exited' ? ' (revived)' : ''}`);
           }
         } else {
           console.warn(`[startup] No JSONL files found for ${session.name}, marking exited`);
@@ -1861,6 +1866,7 @@ export function createServer({ testMode = false } = {}) {
 
     // Schedule periodic cleanup
     cleanupTimer = setInterval(runCleanup, CLEANUP_INTERVAL_MS);
+    cleanupTimer.unref();
   }
 
   server.destroy = () => {
@@ -1871,6 +1877,15 @@ export function createServer({ testMode = false } = {}) {
       rateLimitMap.clear();
       manager.destroyAll();
       manager.destroyAllShells();
+      // Mark all running sessions as exited before closing the DB.
+      // manager.destroyAll() kills PTYs and removes listeners synchronously,
+      // so the normal onExit handler never fires — do it explicitly here.
+      const { sessions: allSessions } = store.getAll();
+      for (const s of allSessions) {
+        if (s.status === 'running') {
+          store.updateSession(s.id, { status: 'exited' });
+        }
+      }
       store.close();
       wss.close();
       for (const client of clients) {

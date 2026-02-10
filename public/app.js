@@ -482,6 +482,7 @@
           // Reconcile: if active session no longer exists, return to home
           if (activeSessionId && !sessions.find((s) => s.id === activeSessionId)) {
             activeSessionId = null;
+            try { localStorage.removeItem('claude-console-active-session'); } catch {}
             term.reset();
             noSession.classList.remove('hidden');
             rightPanel.classList.add('hidden');
@@ -490,6 +491,16 @@
             document.getElementById('terminal-wrapper').style.display = '';
             document.getElementById('terminal-wrapper').style.inset = '0';
           }
+          // Auto-restore: if no session is active, try to reattach the last
+          // active session from localStorage (survives page refresh / app restart).
+          if (!activeSessionId) {
+            try {
+              const saved = localStorage.getItem('claude-console-active-session');
+              if (saved && sessions.find((s) => s.id === saved)) {
+                attachSession(saved);
+              }
+            } catch {}
+          }
           renderSidebar();
           break;
 
@@ -497,6 +508,7 @@
           sessionIdleState.delete(msg.sessionId);
           if (msg.sessionId === activeSessionId) {
             activeSessionId = null;
+            try { localStorage.removeItem('claude-console-active-session'); } catch {}
             term.reset();
             noSession.classList.remove('hidden');
             rightPanel.classList.add('hidden');
@@ -559,6 +571,7 @@
 
   function attachSession(sessionId) {
     activeSessionId = sessionId;
+    try { localStorage.setItem('claude-console-active-session', sessionId); } catch {}
     term.reset();
     shellTerm.reset();
 
@@ -1484,13 +1497,21 @@
     if (pendingFileOpens.has(filePath)) return;
     pendingFileOpens.add(filePath);
 
+    // Capture session ID now — if the user switches sessions while the
+    // fetch is in-flight we must discard the result rather than mixing
+    // file content from one session into another session's tab list.
+    const sessionId = activeSessionId;
+
     // Fetch file content
     let res;
     try {
-      res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(filePath)}`);
+      res = await fetch(`/api/file?sessionId=${sessionId}&path=${encodeURIComponent(filePath)}`);
     } finally {
       pendingFileOpens.delete(filePath);
     }
+
+    // Discard result if user switched sessions during the fetch
+    if (activeSessionId !== sessionId) return;
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: 'Failed to load file' }));
