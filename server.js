@@ -1414,7 +1414,8 @@ export function createServer({ testMode = false } = {}) {
     for (const ws of clients) {
       if (ws.isAlive === false) {
         clients.delete(ws);
-        return ws.terminate();
+        ws.terminate();
+        continue;
       }
       ws.isAlive = false;
       ws.ping();
@@ -1470,6 +1471,7 @@ export function createServer({ testMode = false } = {}) {
       if (msg.sessionId !== undefined && typeof msg.sessionId !== 'string') return;
       if (msg.cols !== undefined && (!Number.isInteger(msg.cols) || msg.cols < 1 || msg.cols > 500)) return;
       if (msg.rows !== undefined && (!Number.isInteger(msg.rows) || msg.rows < 1 || msg.rows > 200)) return;
+      if (msg.data !== undefined && typeof msg.data !== 'string') return;
 
       switch (msg.type) {
         case 'attach': {
@@ -1537,7 +1539,7 @@ export function createServer({ testMode = false } = {}) {
         }
 
         case 'input': {
-          if (attachedSessionId) {
+          if (attachedSessionId && msg.data) {
             manager.write(attachedSessionId, msg.data);
           }
           break;
@@ -1565,15 +1567,8 @@ export function createServer({ testMode = false } = {}) {
           const project = store.getProject(session.projectId);
           if (!project) { console.log('[shell-attach] project not found'); break; }
 
-          // Detach previous shell listener (use dedicated tracking variable
-          // since attachedSessionId may already point to the new session)
-          if (attachedShellSessionId && shellDataListener) {
-            manager.offShellData(attachedShellSessionId, shellDataListener);
-            shellDataListener = null;
-          }
-          attachedShellSessionId = sessionId;
-
-          // Spawn shell if not already running
+          // Resolve worktree path BEFORE detaching the old listener so that
+          // on error the previous shell connection remains intact.
           if (!manager.isShellAlive(sessionId)) {
             let cwd = project.cwd;
             if (session.worktreePath) {
@@ -1585,10 +1580,28 @@ export function createServer({ testMode = false } = {}) {
                 break;
               }
             }
+
+            // Detach previous shell listener (use dedicated tracking variable
+            // since attachedSessionId may already point to the new session)
+            if (attachedShellSessionId && shellDataListener) {
+              manager.offShellData(attachedShellSessionId, shellDataListener);
+              shellDataListener = null;
+            }
+            attachedShellSessionId = sessionId;
+
             console.log('[shell-attach] spawning shell in:', cwd);
             manager.spawnShell(sessionId, { cwd, cols, rows });
-          } else if (cols && rows) {
-            manager.resizeShell(sessionId, cols, rows);
+          } else {
+            // Detach previous shell listener
+            if (attachedShellSessionId && shellDataListener) {
+              manager.offShellData(attachedShellSessionId, shellDataListener);
+              shellDataListener = null;
+            }
+            attachedShellSessionId = sessionId;
+
+            if (cols && rows) {
+              manager.resizeShell(sessionId, cols, rows);
+            }
           }
 
           // Install live listener with replay buffering (same pattern as attach)
@@ -1622,7 +1635,7 @@ export function createServer({ testMode = false } = {}) {
         }
 
         case 'shell-input': {
-          if (msg.sessionId) {
+          if (msg.sessionId && msg.data) {
             manager.writeShell(msg.sessionId, msg.data);
           }
           break;
