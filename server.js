@@ -8,6 +8,7 @@ import crypto from 'node:crypto';
 import os from 'node:os';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
+import zlib from 'node:zlib';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const execFileAsync = promisify(execFile);
@@ -31,19 +32,177 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const MAX_NAME_LENGTH = 100;
 const MAX_CWD_LENGTH = 1024;
+const GIT_EXEC_TIMEOUT_MS = 15_000;
+const GIT_EXEC_MAX_BUFFER = 1024 * 1024; // 1MB
+
+const MAX_SESSIONS_PER_PROJECT = 20;
+const MAX_TOTAL_SESSIONS = 50;
+const MAX_WEBSOCKET_CLIENTS = 100;
+
+function gitOpts(cwd, extra) {
+  return { cwd, timeout: GIT_EXEC_TIMEOUT_MS, maxBuffer: GIT_EXEC_MAX_BUFFER, ...extra };
+}
 
 export function createServer({ testMode = false } = {}) {
   const app = express();
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
   const manager = new PtyManager();
 
   // In test mode, use bash instead of claude; in-memory SQLite
   const store = testMode ? createStore(':memory:') : createStore();
   const clients = new Set();
+  const startTime = Date.now();
+
+  // --- Security Headers ---
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '0');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; img-src 'self' data:; font-src 'self'"
+    );
+    next();
+  });
+
+  // --- Request ID + Logging ---
+  app.use((req, res, next) => {
+    const requestId = crypto.randomUUID();
+    req.id = requestId;
+    res.setHeader('X-Request-ID', requestId);
+
+    const start = Date.now();
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      const level = res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info';
+      console.log(JSON.stringify({
+        level,
+        request_id: requestId,
+        method: req.method,
+        url: req.originalUrl,
+        status: res.statusCode,
+        duration_ms: duration,
+        timestamp: new Date().toISOString(),
+      }));
+    });
+    next();
+  });
+
+  // --- Rate Limiting ---
+  const rateLimitMap = new Map();
+  const RATE_LIMIT_WINDOW_MS = 60_000;
+  const RATE_LIMIT_MAX = testMode ? 10000 : 100;
+  const RATE_LIMIT_CLEANUP_INTERVAL = 5 * 60_000;
+
+  function rateLimit(req, res, next) {
+    const key = req.ip || '127.0.0.1';
+    const now = Date.now();
+    let entry = rateLimitMap.get(key);
+
+    if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+      entry = { windowStart: now, count: 0 };
+      rateLimitMap.set(key, entry);
+    }
+
+    entry.count++;
+
+    if (entry.count > RATE_LIMIT_MAX) {
+      res.setHeader('Retry-After', Math.ceil((entry.windowStart + RATE_LIMIT_WINDOW_MS - now) / 1000));
+      return res.status(429).json({ error: 'Too many requests' });
+    }
+
+    next();
+  }
+
+  // Periodically clean up stale rate limit entries
+  const rateLimitCleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of rateLimitMap) {
+      if (now - entry.windowStart > RATE_LIMIT_WINDOW_MS * 2) {
+        rateLimitMap.delete(key);
+      }
+    }
+  }, RATE_LIMIT_CLEANUP_INTERVAL);
+  rateLimitCleanupTimer.unref();
+
+  // Apply rate limiting to mutation endpoints
+  app.use('/api', (req, res, next) => {
+    if (req.method === 'POST' || req.method === 'PATCH' || req.method === 'DELETE') {
+      return rateLimit(req, res, next);
+    }
+    next();
+  });
 
   app.use(express.json({ limit: '16kb' }));
-  app.use(express.static(path.join(__dirname, 'public')));
+
+  // --- Request Timeout ---
+  app.use((req, res, next) => {
+    const timeout = req.path.includes('/git/') ? 30_000 : 15_000;
+    req.setTimeout(timeout);
+    res.setTimeout(timeout, () => {
+      if (!res.headersSent) {
+        res.status(408).json({ error: 'Request timeout' });
+      }
+    });
+    next();
+  });
+
+  // --- Response Compression ---
+  // Compress JSON API responses using Node's built-in zlib (no external deps)
+  app.use((req, res, next) => {
+    const acceptEncoding = req.headers['accept-encoding'] || '';
+    if (!acceptEncoding.includes('gzip')) return next();
+
+    // Only compress API responses (not static files - express.static handles those)
+    if (!req.path.startsWith('/api') && req.path !== '/health') return next();
+
+    // Override res.json to compress the output
+    const _json = res.json.bind(res);
+    res.json = function (body) {
+      const jsonStr = JSON.stringify(body);
+      // Skip compression for small payloads (< 1KB)
+      if (jsonStr.length < 1024) return _json.call(this, body);
+
+      zlib.gzip(Buffer.from(jsonStr), (err, compressed) => {
+        if (err) return _json.call(this, body);
+        res.setHeader('Content-Encoding', 'gzip');
+        res.setHeader('Vary', 'Accept-Encoding');
+        res.removeHeader('Content-Length');
+        res.setHeader('Content-Type', 'application/json');
+        res.end(compressed);
+      });
+    };
+    next();
+  });
+
+  // --- Health Check ---
+  app.get('/health', (req, res) => {
+    const memUsage = process.memoryUsage();
+    res.json({
+      status: 'ok',
+      uptime_s: Math.floor((Date.now() - startTime) / 1000),
+      pid: process.pid,
+      memory: {
+        rss_mb: Math.round(memUsage.rss / 1024 / 1024),
+        heap_used_mb: Math.round(memUsage.heapUsed / 1024 / 1024),
+        heap_total_mb: Math.round(memUsage.heapTotal / 1024 / 1024),
+      },
+      sessions: {
+        total: store.getAll().sessions.length,
+        alive: manager.getAll().length,
+      },
+      websocket_clients: clients.size,
+    });
+  });
+
+  app.use(express.static(path.join(__dirname, 'public'), {
+    etag: true,
+    lastModified: true,
+    maxAge: testMode ? 0 : '1h',
+  }));
 
   // --- Session-scoped file browser (for file tree) ---
 
@@ -312,14 +471,14 @@ export function createServer({ testMode = false } = {}) {
       // Get current branch
       let branch = '';
       try {
-        const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
+        const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], gitOpts(cwd));
         branch = stdout.trim();
       } catch {
         branch = 'HEAD (detached)';
       }
 
       // Get porcelain status
-      const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-uall'], { cwd });
+      const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-uall'], gitOpts(cwd));
 
       const staged = [];
       const unstaged = [];
@@ -353,7 +512,7 @@ export function createServer({ testMode = false } = {}) {
       try {
         const { stdout: abOut } = await execFileAsync(
           'git', ['rev-list', '--left-right', '--count', `@{upstream}...HEAD`],
-          { cwd }
+          gitOpts(cwd)
         );
         const parts = abOut.trim().split(/\s+/);
         behind = parseInt(parts[0], 10) || 0;
@@ -381,7 +540,7 @@ export function createServer({ testMode = false } = {}) {
       if (isStaged) args.push('--cached');
       if (filePath) args.push('--', filePath);
 
-      const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 1024 * 1024 });
+      const { stdout } = await execFileAsync('git', args, gitOpts(cwd));
       res.json({ diff: stdout });
     } catch (e) {
       res.status(500).json({ error: `Git diff failed: ${e.message}` });
@@ -419,7 +578,7 @@ export function createServer({ testMode = false } = {}) {
       } else {
         args.push('--', ...paths);
       }
-      await execFileAsync('git', args, { cwd });
+      await execFileAsync('git', args, gitOpts(cwd));
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: `Git stage failed: ${e.message}` });
@@ -455,7 +614,7 @@ export function createServer({ testMode = false } = {}) {
       if (!all && paths) {
         args.push('--', ...paths);
       }
-      await execFileAsync('git', args, { cwd });
+      await execFileAsync('git', args, gitOpts(cwd));
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: `Git unstage failed: ${e.message}` });
@@ -485,7 +644,7 @@ export function createServer({ testMode = false } = {}) {
     }
 
     try {
-      await execFileAsync('git', ['checkout', '--', ...paths], { cwd });
+      await execFileAsync('git', ['checkout', '--', ...paths], gitOpts(cwd));
       res.json({ ok: true });
     } catch (e) {
       res.status(500).json({ error: `Git discard failed: ${e.message}` });
@@ -509,17 +668,17 @@ export function createServer({ testMode = false } = {}) {
 
     try {
       // Check if there's anything staged
-      const { stdout: statusOut } = await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd });
+      const { stdout: statusOut } = await execFileAsync('git', ['diff', '--cached', '--name-only'], gitOpts(cwd));
       if (!statusOut.trim()) {
         return res.status(400).json({ error: 'Nothing staged to commit' });
       }
 
-      await execFileAsync('git', ['-c', 'commit.gpgsign=false', 'commit', '-m', message], { cwd });
+      await execFileAsync('git', ['-c', 'commit.gpgsign=false', 'commit', '-m', message], gitOpts(cwd));
 
       // Get the new commit info
       const { stdout: logOut } = await execFileAsync(
         'git', ['log', '-1', '--format=%H%n%h%n%s%n%an%n%aI'],
-        { cwd }
+        gitOpts(cwd)
       );
       const [hash, shortHash, subject, author, date] = logOut.trim().split('\n');
 
@@ -543,7 +702,7 @@ export function createServer({ testMode = false } = {}) {
 
     try {
       // Check worktree is clean
-      const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], { cwd });
+      const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], gitOpts(cwd));
       if (statusOut.trim()) {
         return res.status(400).json({
           error: 'Worktree has uncommitted changes. Commit or discard before merging.',
@@ -557,14 +716,14 @@ export function createServer({ testMode = false } = {}) {
         // Try symbolic-ref for the remote HEAD
         const { stdout: symRef } = await execFileAsync(
           'git', ['symbolic-ref', 'refs/remotes/origin/HEAD'],
-          { cwd: project.cwd }
+          gitOpts(project.cwd)
         );
         defaultBranch = symRef.trim().replace('refs/remotes/origin/', '');
       } catch {
         // Fall back: check for common branch names
         for (const candidate of ['main', 'master']) {
           try {
-            await execFileAsync('git', ['rev-parse', '--verify', candidate], { cwd: project.cwd });
+            await execFileAsync('git', ['rev-parse', '--verify', candidate], gitOpts(project.cwd));
             defaultBranch = candidate;
             break;
           } catch {
@@ -582,7 +741,7 @@ export function createServer({ testMode = false } = {}) {
 
       // Check for any uncommitted changes on the main worktree (project root)
       // Use -uno to ignore untracked files (e.g. .worktrees/ directory)
-      const { stdout: mainStatus } = await execFileAsync('git', ['status', '--porcelain', '-uno'], { cwd: project.cwd });
+      const { stdout: mainStatus } = await execFileAsync('git', ['status', '--porcelain', '-uno'], gitOpts(project.cwd));
       if (mainStatus.trim()) {
         return res.status(400).json({
           error: `The ${defaultBranch} branch has uncommitted changes. Clean it before merging.`,
@@ -593,7 +752,7 @@ export function createServer({ testMode = false } = {}) {
       // Verify the project root is actually on the default branch
       const { stdout: currentBranch } = await execFileAsync(
         'git', ['rev-parse', '--abbrev-ref', 'HEAD'],
-        { cwd: project.cwd }
+        gitOpts(project.cwd)
       );
       if (currentBranch.trim() !== defaultBranch) {
         return res.status(400).json({
@@ -606,7 +765,7 @@ export function createServer({ testMode = false } = {}) {
       try {
         await execFileAsync(
           'git', ['-c', 'commit.gpgsign=false', 'merge', '--no-edit', fullBranchName],
-          { cwd: project.cwd }
+          gitOpts(project.cwd)
         );
       } catch (mergeErr) {
         // Check if it's a merge conflict (git outputs conflict info to stdout)
@@ -614,7 +773,7 @@ export function createServer({ testMode = false } = {}) {
         if (mergeOutput.includes('CONFLICT') || mergeOutput.includes('Automatic merge failed') || mergeOutput.includes('Merge conflict')) {
           // Abort the failed merge to leave the project clean
           try {
-            await execFileAsync('git', ['merge', '--abort'], { cwd: project.cwd });
+            await execFileAsync('git', ['merge', '--abort'], gitOpts(project.cwd));
           } catch {
             // Best effort
           }
@@ -629,7 +788,7 @@ export function createServer({ testMode = false } = {}) {
       // Get the merge commit info
       const { stdout: logOut } = await execFileAsync(
         'git', ['log', '-1', '--format=%H%n%h%n%s%n%an%n%aI'],
-        { cwd: project.cwd }
+        gitOpts(project.cwd)
       );
       const [hash, shortHash, subject, author, date] = logOut.trim().split('\n');
 
@@ -654,7 +813,7 @@ export function createServer({ testMode = false } = {}) {
     try {
       const { stdout } = await execFileAsync(
         'git', ['log', `--max-count=${limit}`, '--format=%H%x00%h%x00%s%x00%an%x00%aI'],
-        { cwd }
+        gitOpts(cwd)
       );
 
       const commits = stdout.trim().split('\n').filter(Boolean).map(line => {
@@ -881,6 +1040,22 @@ export function createServer({ testMode = false } = {}) {
     const { name } = req.body;
     if (!name || typeof name !== 'string' || name.length > MAX_NAME_LENGTH) {
       return res.status(400).json({ error: `name is required (string, max ${MAX_NAME_LENGTH} chars)` });
+    }
+
+    // Enforce resource limits
+    const projectSessions = store.getSessions(req.params.id);
+    if (projectSessions.length >= MAX_SESSIONS_PER_PROJECT) {
+      return res.status(429).json({
+        error: `Maximum sessions per project reached (${MAX_SESSIONS_PER_PROJECT}). Delete or archive existing sessions.`,
+        code: 'SESSION_LIMIT_PER_PROJECT',
+      });
+    }
+    const allSessions = store.getAll().sessions;
+    if (allSessions.length >= MAX_TOTAL_SESSIONS) {
+      return res.status(429).json({
+        error: `Maximum total sessions reached (${MAX_TOTAL_SESSIONS}). Delete or archive existing sessions.`,
+        code: 'SESSION_LIMIT_TOTAL',
+      });
     }
 
     try {
@@ -1138,8 +1313,31 @@ export function createServer({ testMode = false } = {}) {
 
   // --- WebSocket ---
 
+  // Ping/pong heartbeat to detect stale connections
+  const WS_HEARTBEAT_INTERVAL_MS = 30_000;
+
+  const heartbeatTimer = setInterval(() => {
+    for (const ws of clients) {
+      if (ws.isAlive === false) {
+        clients.delete(ws);
+        return ws.terminate();
+      }
+      ws.isAlive = false;
+      ws.ping();
+    }
+  }, WS_HEARTBEAT_INTERVAL_MS);
+  heartbeatTimer.unref();
+
   wss.on('connection', (ws) => {
+    // Enforce WebSocket connection limit
+    if (clients.size >= MAX_WEBSOCKET_CLIENTS) {
+      ws.close(1013, 'Maximum connections reached');
+      return;
+    }
+
     clients.add(ws);
+    ws.isAlive = true;
+    ws.on('pong', () => { ws.isAlive = true; });
     let attachedSessionId = null;
 
     // Send initial state
@@ -1168,6 +1366,14 @@ export function createServer({ testMode = false } = {}) {
       } catch {
         return;
       }
+
+      // Validate message structure
+      if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
+
+      // Validate common fields when present
+      if (msg.sessionId !== undefined && typeof msg.sessionId !== 'string') return;
+      if (msg.cols !== undefined && (!Number.isInteger(msg.cols) || msg.cols < 1 || msg.cols > 500)) return;
+      if (msg.rows !== undefined && (!Number.isInteger(msg.rows) || msg.rows < 1 || msg.rows > 200)) return;
 
       switch (msg.type) {
         case 'attach': {
@@ -1337,6 +1543,23 @@ export function createServer({ testMode = false } = {}) {
     });
   });
 
+  // --- Global Error Handler ---
+  // Must be registered after all routes (Express identifies error handlers by 4 args)
+  app.use((err, req, res, _next) => {
+    console.error(JSON.stringify({
+      level: 'error',
+      type: 'unhandled_route_error',
+      method: req.method,
+      url: req.originalUrl,
+      error: err.message,
+      stack: testMode ? undefined : err.stack,
+      timestamp: new Date().toISOString(),
+    }));
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   // --- Startup: recover missing Claude session IDs, then resume ---
 
   if (!testMode) {
@@ -1469,6 +1692,9 @@ export function createServer({ testMode = false } = {}) {
   server.destroy = () => {
     return new Promise((resolve) => {
       if (cleanupTimer) clearInterval(cleanupTimer);
+      clearInterval(rateLimitCleanupTimer);
+      clearInterval(heartbeatTimer);
+      rateLimitMap.clear();
       manager.destroyAll();
       manager.destroyAllShells();
       store.close();
@@ -1488,8 +1714,56 @@ export function createServer({ testMode = false } = {}) {
 
 // Run if executed directly (ESM-safe check)
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  const port = process.env.PORT || 3000;
+  const port = parseInt(process.env.PORT || '3000', 10);
+  if (isNaN(port) || port < 1 || port > 65535) {
+    console.error(`Invalid PORT: ${process.env.PORT}. Must be 1-65535.`);
+    process.exit(1);
+  }
+
   const server = createServer();
+
+  // --- Process-level Error Handlers ---
+  process.on('uncaughtException', (err) => {
+    console.error(JSON.stringify({
+      level: 'fatal',
+      type: 'uncaught_exception',
+      error: err.message,
+      stack: err.stack,
+      timestamp: new Date().toISOString(),
+    }));
+    server.destroy().then(() => process.exit(1));
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    console.error(JSON.stringify({
+      level: 'error',
+      type: 'unhandled_rejection',
+      error: reason instanceof Error ? reason.message : String(reason),
+      stack: reason instanceof Error ? reason.stack : undefined,
+      timestamp: new Date().toISOString(),
+    }));
+  });
+
+  // --- Graceful Shutdown ---
+  let isShuttingDown = false;
+
+  async function gracefulShutdown(signal) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`${signal} received, starting graceful shutdown...`);
+    try {
+      await server.destroy();
+      console.log('Graceful shutdown complete.');
+      process.exit(0);
+    } catch (err) {
+      console.error(`Error during shutdown: ${err.message}`);
+      process.exit(1);
+    }
+  }
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
   server.listen(port, '127.0.0.1', () => {
     console.log(`Claude Console running at http://127.0.0.1:${port}`);
   });

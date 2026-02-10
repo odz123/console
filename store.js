@@ -45,28 +45,48 @@ export function createStore(dbPath) {
   db.pragma('foreign_keys = ON');
   db.pragma('busy_timeout = 5000');
 
-  // Create tables
-  db.exec(`
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      cwd TEXT NOT NULL,
-      created_at TEXT NOT NULL
-    );
+  // --- Schema versioning & migrations ---
+  const CURRENT_SCHEMA_VERSION = 1;
 
-    CREATE TABLE IF NOT EXISTS sessions (
-      id TEXT PRIMARY KEY,
-      project_id TEXT NOT NULL REFERENCES projects(id),
-      name TEXT NOT NULL,
-      branch_name TEXT,
-      worktree_path TEXT,
-      claude_session_id TEXT,
-      status TEXT NOT NULL DEFAULT 'running',
-      created_at TEXT NOT NULL
-    );
+  db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
+  const versionRow = db.prepare('SELECT version FROM schema_version').get();
+  let dbVersion = versionRow ? versionRow.version : 0;
 
-    CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id);
-  `);
+  // Migration 0 -> 1: initial schema
+  if (dbVersion < 1) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS projects (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        cwd TEXT NOT NULL,
+        created_at TEXT NOT NULL
+      );
+
+      CREATE TABLE IF NOT EXISTS sessions (
+        id TEXT PRIMARY KEY,
+        project_id TEXT NOT NULL REFERENCES projects(id),
+        name TEXT NOT NULL,
+        branch_name TEXT,
+        worktree_path TEXT,
+        claude_session_id TEXT,
+        status TEXT NOT NULL DEFAULT 'running',
+        created_at TEXT NOT NULL
+      );
+
+      CREATE INDEX IF NOT EXISTS idx_sessions_project_id ON sessions(project_id);
+    `);
+    dbVersion = 1;
+  }
+
+  // Future migrations go here:
+  // if (dbVersion < 2) { ... dbVersion = 2; }
+
+  // Upsert schema version
+  if (!versionRow) {
+    db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(CURRENT_SCHEMA_VERSION);
+  } else if (versionRow.version !== CURRENT_SCHEMA_VERSION) {
+    db.prepare('UPDATE schema_version SET version = ?').run(CURRENT_SCHEMA_VERSION);
+  }
 
   // Prepared statements
   const stmts = {
