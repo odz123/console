@@ -24,6 +24,11 @@
     </aside>
     <div id="sidebar-divider"></div>
     <main id="terminal-container">
+      <div id="breadcrumb-bar" class="hidden">
+        <span id="breadcrumb-project" class="breadcrumb-segment"></span>
+        <span class="breadcrumb-divider">/</span>
+        <span id="breadcrumb-session" class="breadcrumb-segment breadcrumb-active"></span>
+      </div>
       <div id="tab-bar">
         <div id="tab-list"></div>
       </div>
@@ -59,6 +64,9 @@
         </div>
         <div class="status-bar-right">
           <span id="status-activity" class="status-item"></span>
+          <span class="status-sep">|</span>
+          <button id="status-interrupt" class="status-btn" title="Send interrupt (Ctrl+C)">Interrupt</button>
+          <button id="status-compact" class="status-btn" title="Send /compact to reduce context">Compact</button>
         </div>
       </div>
     </main>
@@ -72,6 +80,9 @@
           <span id="right-panel-path"></span>
           <button id="btn-refresh-file-tree" class="panel-toggle" title="Refresh file tree">&#x21BB;</button>
           <button id="btn-toggle-file-tree" class="panel-toggle" title="Collapse file tree">&#x25BC;</button>
+        </div>
+        <div class="file-tree-search">
+          <input id="file-tree-filter" type="text" placeholder="Filter files..." autocomplete="off">
         </div>
         <div id="file-tree" class="file-tree-container"></div>
         <div id="git-panel" class="git-panel hidden">
@@ -126,6 +137,40 @@
       <div class="modal-buttons">
         <button id="btn-modal-cancel">Cancel</button>
         <button id="btn-modal-create" disabled>Create Project</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Keyboard shortcuts modal -->
+  <div id="shortcuts-overlay" class="hidden">
+    <div id="shortcuts-modal">
+      <div class="shortcuts-header">
+        <h2>Keyboard Shortcuts</h2>
+        <button id="btn-close-shortcuts" class="shortcuts-close">&times;</button>
+      </div>
+      <div class="shortcuts-body">
+        <div class="shortcuts-section">
+          <h3>Navigation</h3>
+          <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Tab</kbd><span>Cycle tabs</span></div>
+          <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
+          <div class="shortcut-row"><kbd>?</kbd><span>Show shortcuts</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>Session</h3>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>C</kbd><span>Interrupt Claude</span></div>
+          <div class="shortcut-row"><kbd>Esc</kbd><span>Close modal / dialog</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>File Tree</h3>
+          <div class="shortcut-row"><kbd>Click</kbd> folder<span>Expand / collapse</span></div>
+          <div class="shortcut-row"><kbd>Click</kbd> file<span>Open in tab</span></div>
+          <div class="shortcut-row">Filter input<span>Search files by name</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>Git Panel</h3>
+          <div class="shortcut-row"><kbd>Click</kbd> file row<span>View diff</span></div>
+          <div class="shortcut-row"><kbd>Enter</kbd> in commit<span>Commit staged</span></div>
+        </div>
       </div>
     </div>
   </div>

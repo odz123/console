@@ -1526,6 +1526,183 @@ body {
   flex-shrink: 0;
 }
 
+/* --- Breadcrumb bar --- */
+
+#breadcrumb-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: #343230;
+  border-bottom: 1px solid #3d3a36;
+  font-size: 12px;
+  flex-shrink: 0;
+  z-index: 2;
+}
+#breadcrumb-bar.hidden { display: none; }
+
+.breadcrumb-segment {
+  color: #8c8478;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.breadcrumb-active {
+  color: #e8dfd5;
+}
+
+.breadcrumb-divider {
+  color: #3d3a36;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+/* --- Status bar buttons --- */
+
+.status-btn {
+  padding: 1px 8px;
+  font-size: 10px;
+  background: #3d3a36;
+  color: #8c8478;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background 0.15s, color 0.15s;
+}
+.status-btn:hover {
+  background: #d97757;
+  color: #fff;
+}
+
+/* --- File tree search --- */
+
+.file-tree-search {
+  padding: 4px 8px;
+  border-bottom: 1px solid #3d3a36;
+  flex-shrink: 0;
+}
+
+#file-tree-filter {
+  width: 100%;
+  padding: 4px 8px;
+  background: #2b2a27;
+  border: 1px solid #3d3a36;
+  border-radius: 4px;
+  color: #f0ebe3;
+  font-size: 11px;
+  outline: none;
+}
+#file-tree-filter:focus {
+  border-color: #d97757;
+}
+#file-tree-filter::placeholder {
+  color: #8c8478;
+}
+
+.file-tree-item.filter-hidden {
+  display: none;
+}
+
+.file-tree-highlight {
+  background: rgba(217, 119, 87, 0.3);
+  border-radius: 2px;
+}
+
+/* --- Keyboard shortcuts modal --- */
+
+#shortcuts-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 200;
+}
+#shortcuts-overlay.hidden { display: none; }
+
+#shortcuts-modal {
+  background: #343230;
+  border: 1px solid #3d3a36;
+  border-radius: 8px;
+  width: 420px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+}
+
+.shortcuts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 12px;
+  border-bottom: 1px solid #3d3a36;
+}
+
+.shortcuts-header h2 {
+  font-size: 15px;
+  font-weight: 600;
+  color: #f0ebe3;
+}
+
+.shortcuts-close {
+  background: none;
+  border: none;
+  color: #8c8478;
+  font-size: 20px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+.shortcuts-close:hover { color: #d97757; }
+
+.shortcuts-body {
+  padding: 12px 20px 20px;
+}
+
+.shortcuts-section {
+  margin-bottom: 16px;
+}
+.shortcuts-section:last-child {
+  margin-bottom: 0;
+}
+
+.shortcuts-section h3 {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8c8478;
+  margin-bottom: 8px;
+}
+
+.shortcut-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 0;
+  font-size: 12px;
+  color: #e8dfd5;
+}
+
+.shortcut-row span {
+  color: #8c8478;
+}
+
+kbd {
+  display: inline-block;
+  padding: 2px 6px;
+  background: #2b2a27;
+  border: 1px solid #3d3a36;
+  border-radius: 3px;
+  font-size: 11px;
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  color: #e8dfd5;
+  line-height: 1.2;
+}
+
 /* --- Mobile header (hidden on desktop) --- */
 
 #mobile-header {
@@ -1743,6 +1920,18 @@ body {
   }
   .landing-page {
     max-width: 320px;
+  }
+
+  /* Breadcrumb bar: compact */
+  #breadcrumb-bar {
+    font-size: 11px;
+    padding: 3px 10px;
+  }
+
+  /* Keyboard shortcuts: wider on mobile */
+  #shortcuts-modal {
+    width: calc(100vw - 32px);
+    margin: 16px;
   }
 
   /* Git panel: file actions always visible on mobile */

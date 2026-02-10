@@ -95,6 +95,21 @@
   const landingRecent = document.getElementById('landing-recent');
   let statusDurationTimer = null;
 
+  // Breadcrumb bar refs
+  const breadcrumbBar = document.getElementById('breadcrumb-bar');
+  const breadcrumbProject = document.getElementById('breadcrumb-project');
+  const breadcrumbSession = document.getElementById('breadcrumb-session');
+
+  // Session control refs
+  const statusInterrupt = document.getElementById('status-interrupt');
+  const statusCompact = document.getElementById('status-compact');
+
+  // File tree filter ref
+  const fileTreeFilter = document.getElementById('file-tree-filter');
+
+  // Keyboard shortcuts ref
+  const shortcutsOverlay = document.getElementById('shortcuts-overlay');
+
   // --- Helpers ---
   function wsSend(data) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -177,12 +192,10 @@
     statusActivity.innerHTML =
       `<span class="status-activity-dot ${dotClass}"></span> ${label}`;
 
-    // Adjust terminal wrapper bottom inset for status bar
+    // Adjust terminal wrapper inset for status bar + breadcrumb
     const termWrapper = document.getElementById('terminal-wrapper');
     if (termWrapper && termWrapper.style.display !== 'none') {
-      const tabH = getComputedStyle(document.documentElement)
-        .getPropertyValue('--tab-bar-height') || '32px';
-      termWrapper.style.inset = `${tabH} 0 24px 0`;
+      termWrapper.style.inset = `${getTopInset()} 0 24px 0`;
     }
 
     // Start duration timer if not running
@@ -240,6 +253,23 @@
     landingRecent.innerHTML = '';
     landingRecent.appendChild(header);
     landingRecent.appendChild(list);
+  }
+
+  // --- Breadcrumb bar ---
+  function updateBreadcrumb() {
+    if (!activeSessionId) {
+      breadcrumbBar.classList.add('hidden');
+      return;
+    }
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session) {
+      breadcrumbBar.classList.add('hidden');
+      return;
+    }
+    const project = projects.find(p => p.id === session.projectId);
+    breadcrumbProject.textContent = project ? project.name : 'Unknown';
+    breadcrumbSession.textContent = session.name || 'Untitled';
+    breadcrumbBar.classList.remove('hidden');
   }
 
   // --- Toast notifications ---
@@ -631,6 +661,7 @@
           }
           renderSidebar();
           updateStatusBar();
+          updateBreadcrumb();
           if (!activeSessionId) renderLandingRecent();
           break;
 
@@ -647,6 +678,7 @@
             document.getElementById('terminal-wrapper').style.display = '';
             document.getElementById('terminal-wrapper').style.inset = '0';
             updateStatusBar();
+            updateBreadcrumb();
             renderLandingRecent();
           }
           break;
@@ -756,6 +788,7 @@
     term.focus();
     renderSidebar();
     updateStatusBar();
+    updateBreadcrumb();
   }
 
   function updateStatusDot(sessionId, idle) {
@@ -1581,6 +1614,17 @@
     }
   }
 
+  function getTopInset() {
+    const tabH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--tab-bar-height')) || 32;
+    const bcH = breadcrumbBar && !breadcrumbBar.classList.contains('hidden')
+      ? breadcrumbBar.offsetHeight : 0;
+    return (tabH + bcH) + 'px';
+  }
+
+  function getBottomInset() {
+    return statusBar && !statusBar.classList.contains('hidden') ? '24px' : '0';
+  }
+
   function switchTab(tabId) {
     activeTabId = tabId;
     renderTabs();
@@ -1590,9 +1634,7 @@
     if (tabId === 'claude') {
       // Show terminal, hide file viewer
       termWrapper.style.display = '';
-      const tabH = getComputedStyle(document.documentElement).getPropertyValue('--tab-bar-height') || '32px';
-      const bottomInset = statusBar && !statusBar.classList.contains('hidden') ? '24px' : '0';
-      termWrapper.style.inset = `${tabH} 0 ${bottomInset} 0`;
+      termWrapper.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
       fileViewer.classList.add('hidden');
       term.focus();
       // Refit terminal synchronously so term.cols/rows are correct before
@@ -1603,8 +1645,7 @@
       // Show file viewer, hide terminal
       termWrapper.style.display = 'none';
       fileViewer.classList.remove('hidden');
-      const bottomInset = statusBar && !statusBar.classList.contains('hidden') ? '24px' : '0';
-      fileViewer.style.inset = `var(--tab-bar-height) 0 ${bottomInset} 0`;
+      fileViewer.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
 
       const tab = openTabs.find(t => t.id === tabId);
       if (tab) {
@@ -2425,6 +2466,160 @@
       if (fitAddon) fitAddon.fit();
       if (shellFitAddon) shellFitAddon.fit();
     }, 200);
+  });
+
+  // --- Session controls (status bar buttons) ---
+
+  statusInterrupt.onclick = () => {
+    if (!activeSessionId) return;
+    wsSend(JSON.stringify({ type: 'input', sessionId: activeSessionId, data: '\x03' }));
+    term.focus();
+  };
+
+  statusCompact.onclick = () => {
+    if (!activeSessionId) return;
+    wsSend(JSON.stringify({ type: 'input', sessionId: activeSessionId, data: '/compact\r' }));
+    term.focus();
+  };
+
+  // --- File tree filter ---
+
+  fileTreeFilter.oninput = debounce(() => {
+    const query = fileTreeFilter.value.trim().toLowerCase();
+    filterFileTree(fileTreeEl, query);
+  }, 150);
+
+  function filterFileTree(container, query) {
+    if (!query) {
+      // Clear all filter states
+      const items = container.querySelectorAll('.file-tree-item');
+      items.forEach(el => el.classList.remove('filter-hidden'));
+      // Remove highlights
+      container.querySelectorAll('.file-tree-highlight').forEach(hl => {
+        hl.replaceWith(document.createTextNode(hl.textContent));
+      });
+      // Collapse all children containers that were force-expanded
+      container.querySelectorAll('.file-tree-children.filter-expanded').forEach(ch => {
+        ch.classList.remove('filter-expanded');
+        if (!expandedDirs.has(ch.parentElement && ch.parentElement.dataset && ch.parentElement.dataset.dirPath)) {
+          // Only collapse if not user-expanded
+        }
+      });
+      return;
+    }
+
+    const allItems = container.querySelectorAll('.file-tree-item');
+    const matchedParents = new Set();
+
+    // First pass: find matching file items and mark them
+    allItems.forEach(item => {
+      const label = item.querySelector('.file-tree-label');
+      if (!label) return;
+      const text = label.textContent.toLowerCase();
+      const isFolder = item.classList.contains('file-tree-folder');
+
+      if (text.includes(query)) {
+        item.classList.remove('filter-hidden');
+        // Highlight match
+        highlightMatch(label, query);
+        // Mark all ancestor folders as visible
+        let parent = item.parentElement;
+        while (parent && parent !== container) {
+          if (parent.classList.contains('file-tree-children')) {
+            parent.classList.add('expanded', 'filter-expanded');
+            matchedParents.add(parent);
+          }
+          parent = parent.parentElement;
+        }
+      } else if (!isFolder) {
+        item.classList.add('filter-hidden');
+        clearHighlight(label);
+      }
+    });
+
+    // Second pass: show folders that have visible children, hide empty ones
+    allItems.forEach(item => {
+      if (!item.classList.contains('file-tree-folder')) return;
+      const label = item.querySelector('.file-tree-label');
+      const sibling = item.parentElement && item.parentElement.querySelector('.file-tree-children');
+      if (sibling && matchedParents.has(sibling)) {
+        item.classList.remove('filter-hidden');
+      } else if (label && label.textContent.toLowerCase().includes(query)) {
+        item.classList.remove('filter-hidden');
+      } else {
+        item.classList.add('filter-hidden');
+      }
+      if (label) {
+        if (label.textContent.toLowerCase().includes(query)) {
+          highlightMatch(label, query);
+        } else {
+          clearHighlight(label);
+        }
+      }
+    });
+  }
+
+  function highlightMatch(label, query) {
+    // Remove existing highlights first
+    clearHighlight(label);
+    const text = label.textContent;
+    const lower = text.toLowerCase();
+    const idx = lower.indexOf(query);
+    if (idx === -1) return;
+
+    const before = document.createTextNode(text.slice(0, idx));
+    const match = document.createElement('span');
+    match.className = 'file-tree-highlight';
+    match.textContent = text.slice(idx, idx + query.length);
+    const after = document.createTextNode(text.slice(idx + query.length));
+
+    label.textContent = '';
+    label.appendChild(before);
+    label.appendChild(match);
+    label.appendChild(after);
+  }
+
+  function clearHighlight(label) {
+    const highlights = label.querySelectorAll('.file-tree-highlight');
+    if (highlights.length === 0) return;
+    const text = label.textContent;
+    label.textContent = text;
+  }
+
+  // --- Keyboard shortcuts overlay ---
+
+  function openShortcuts() {
+    shortcutsOverlay.classList.remove('hidden');
+  }
+
+  function closeShortcuts() {
+    shortcutsOverlay.classList.add('hidden');
+  }
+
+  document.getElementById('btn-close-shortcuts').onclick = closeShortcuts;
+
+  shortcutsOverlay.onclick = (e) => {
+    if (e.target === shortcutsOverlay) closeShortcuts();
+  };
+
+  // Extend keyboard handler: ? shows shortcuts, Esc closes
+  document.addEventListener('keydown', (e) => {
+    // Don't trigger shortcuts when typing in inputs or terminals
+    const tag = e.target.tagName;
+    const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    const inTerminal = terminalEl.contains(document.activeElement) ||
+                       shellTerminalEl.contains(document.activeElement);
+
+    if (e.key === 'Escape' && !shortcutsOverlay.classList.contains('hidden')) {
+      closeShortcuts();
+      e.stopPropagation();
+      return;
+    }
+
+    if (e.key === '?' && !inInput && !inTerminal) {
+      e.preventDefault();
+      openShortcuts();
+    }
   });
 
   // --- Init ---
