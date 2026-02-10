@@ -981,11 +981,17 @@
   async function createSession(projectId, name, provider = 'claude', providerOptions) {
     const body = { name, provider };
     if (providerOptions) body.providerOptions = providerOptions;
-    const res = await fetch(`/api/projects/${projectId}/sessions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    let res;
+    try {
+      res = await fetch(`/api/projects/${projectId}/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      showToast('Network error creating session', 'error');
+      return null;
+    }
     if (!res.ok) {
       const err = await res.json();
       // Handle specific error codes
@@ -1250,6 +1256,10 @@
   }
 
   async function renderFileTreeDir(container, relativePath, depth) {
+    // Stamp a generation counter so stale async completions are discarded.
+    // This prevents collapsed/re-expanded folders from showing stale content.
+    const gen = (container._renderGen = (container._renderGen || 0) + 1);
+
     container.innerHTML = '';
 
     const loading = document.createElement('div');
@@ -1258,6 +1268,10 @@
     container.appendChild(loading);
 
     const { dirs, files, hasMore } = await fetchDirEntries(relativePath);
+
+    // Bail if a newer render (or a collapse) superseded this one
+    if (container._renderGen !== gen) return;
+
     container.innerHTML = '';
 
     const indent = depth * 16;
@@ -1294,6 +1308,8 @@
           expandedDirs.delete(dirPath);
           arrow.textContent = '\u25B6';
           children.classList.remove('expanded');
+          // Bump generation to cancel any in-flight async render
+          children._renderGen = (children._renderGen || 0) + 1;
           children.innerHTML = '';
         } else {
           expandedDirs.add(dirPath);
@@ -1564,7 +1580,13 @@
     const tab = openTabs.find(t => t.id === activeTabId);
     if (!tab || tab.type === 'binary') return;
 
-    const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(tab.fullPath)}`);
+    let res;
+    try {
+      res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(tab.fullPath)}`);
+    } catch {
+      showToast('Network error refreshing file', 'error');
+      return;
+    }
     if (!res.ok) {
       showToast('Failed to refresh file', 'error');
       return;

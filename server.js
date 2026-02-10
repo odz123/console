@@ -1058,7 +1058,7 @@ export function createServer({ testMode = false } = {}) {
     const expanded = cwd.startsWith('~') ? cwd.replace(/^~/, os.homedir()) : cwd;
     const resolvedCwd = path.resolve(expanded);
     try {
-      const stat = fs.statSync(resolvedCwd);
+      const stat = await fs.promises.stat(resolvedCwd);
       if (!stat.isDirectory()) {
         return res.status(400).json({ error: 'cwd is not a directory' });
       }
@@ -1164,7 +1164,7 @@ export function createServer({ testMode = false } = {}) {
     }
 
     try {
-      const stat = fs.statSync(project.cwd);
+      const stat = await fs.promises.stat(project.cwd);
       if (!stat.isDirectory()) throw new Error();
     } catch {
       return res.status(400).json({ error: 'Project directory no longer exists' });
@@ -1389,7 +1389,7 @@ export function createServer({ testMode = false } = {}) {
     if (!project) return res.status(400).json({ error: 'Parent project not found' });
 
     try {
-      const stat = fs.statSync(project.cwd);
+      const stat = await fs.promises.stat(project.cwd);
       if (!stat.isDirectory()) throw new Error();
     } catch {
       return res.status(400).json({ error: 'Project directory no longer exists' });
@@ -1492,6 +1492,7 @@ export function createServer({ testMode = false } = {}) {
       if (msg.rows !== undefined && (!Number.isInteger(msg.rows) || msg.rows < 1 || msg.rows > 200)) return;
       if (msg.data !== undefined && typeof msg.data !== 'string') return;
 
+      try {
       switch (msg.type) {
         case 'attach': {
           const { sessionId, cols, rows } = msg;
@@ -1666,6 +1667,9 @@ export function createServer({ testMode = false } = {}) {
           }
           break;
         }
+      }
+      } catch (err) {
+        console.error('[ws] Unhandled error in message handler:', err);
       }
     });
 
