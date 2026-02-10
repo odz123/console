@@ -1792,10 +1792,19 @@ export function createServer({ testMode = false } = {}) {
           .sort((a, b) => b.mtime - a.mtime); // most recently modified conversation first
 
         if (jsonlFiles.length > 0) {
-          const latestId = jsonlFiles[0].name.replace('.jsonl', '');
-          if (latestId !== session.claudeSessionId || session.status === 'exited') {
-            store.updateSession(session.id, { claudeSessionId: latestId, status: 'running' });
-            console.log(`[startup] Updated claude session ID for ${session.name}: ${latestId}${session.claudeSessionId ? ` (was ${session.claudeSessionId})` : ' (was null)'}${session.status === 'exited' ? ' (revived)' : ''}`);
+          // Prefer the session's stored ID if it still exists on disk (non-stub).
+          // Falling back to the latest JSONL only when the stored ID is missing or
+          // was never captured.  This prevents multiple sessions sharing the same
+          // project CWD from all being reassigned to the single newest file.
+          const storedExists = session.claudeSessionId &&
+            jsonlFiles.some(f => f.name === session.claudeSessionId + '.jsonl');
+          const resolvedId = storedExists
+            ? session.claudeSessionId
+            : jsonlFiles[0].name.replace('.jsonl', '');
+
+          if (resolvedId !== session.claudeSessionId || session.status === 'exited') {
+            store.updateSession(session.id, { claudeSessionId: resolvedId, status: 'running' });
+            console.log(`[startup] Updated claude session ID for ${session.name}: ${resolvedId}${session.claudeSessionId ? ` (was ${session.claudeSessionId})` : ' (was null)'}${session.status === 'exited' ? ' (revived)' : ''}`);
           }
         } else {
           console.warn(`[startup] No JSONL files found for ${session.name}, marking exited`);
@@ -1871,6 +1880,15 @@ export function createServer({ testMode = false } = {}) {
       rateLimitMap.clear();
       manager.destroyAll();
       manager.destroyAllShells();
+      // Mark all running sessions as exited before closing the DB.
+      // manager.destroyAll() kills PTYs and removes listeners synchronously,
+      // so the normal onExit handler never fires — do it explicitly here.
+      const { sessions: allSessions } = store.getAll();
+      for (const s of allSessions) {
+        if (s.status === 'running') {
+          store.updateSession(s.id, { status: 'exited' });
+        }
+      }
       store.close();
       wss.close();
       for (const client of clients) {
