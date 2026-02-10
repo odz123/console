@@ -708,7 +708,15 @@
         if (s.provider && s.provider !== 'claude') {
           const providerBadge = document.createElement('span');
           providerBadge.className = 'provider-badge provider-' + s.provider;
-          providerBadge.textContent = s.provider.charAt(0).toUpperCase() + s.provider.slice(1);
+          // Show provider options summary for codex
+          let badgeText = s.provider.charAt(0).toUpperCase() + s.provider.slice(1);
+          if (s.provider === 'codex' && s.providerOptions) {
+            const parts = [];
+            if (s.providerOptions.approvalMode) parts.push(s.providerOptions.approvalMode);
+            if (s.providerOptions.model) parts.push(s.providerOptions.model);
+            if (parts.length) badgeText += ' (' + parts.join(', ') + ')';
+          }
+          providerBadge.textContent = badgeText;
           infoContainer.appendChild(providerBadge);
         }
 
@@ -793,6 +801,9 @@
     const form = document.createElement('div');
     form.className = 'inline-session-form';
 
+    const topRow = document.createElement('div');
+    topRow.className = 'inline-session-row';
+
     const input = document.createElement('input');
     input.className = 'inline-session-input';
     input.type = 'text';
@@ -807,8 +818,38 @@
       providerSelect.appendChild(opt);
     }
 
-    form.appendChild(input);
-    form.appendChild(providerSelect);
+    topRow.appendChild(input);
+    topRow.appendChild(providerSelect);
+    form.appendChild(topRow);
+
+    // Codex-specific options row (hidden by default)
+    const codexRow = document.createElement('div');
+    codexRow.className = 'inline-codex-options hidden';
+
+    const modeSelect = document.createElement('select');
+    modeSelect.className = 'inline-provider-select';
+    modeSelect.title = 'Approval mode';
+    for (const [value, label] of [['suggest', 'Suggest'], ['auto-edit', 'Auto Edit'], ['full-auto', 'Full Auto']]) {
+      const opt = document.createElement('option');
+      opt.value = value;
+      opt.textContent = label;
+      modeSelect.appendChild(opt);
+    }
+
+    const modelInput = document.createElement('input');
+    modelInput.className = 'inline-session-input';
+    modelInput.type = 'text';
+    modelInput.placeholder = 'Model (optional)';
+    modelInput.title = 'Codex model override (e.g. o4-mini)';
+
+    codexRow.appendChild(modeSelect);
+    codexRow.appendChild(modelInput);
+    form.appendChild(codexRow);
+
+    // Toggle codex options visibility based on provider selection
+    providerSelect.onchange = () => {
+      codexRow.classList.toggle('hidden', providerSelect.value !== 'codex');
+    };
 
     ul.insertBefore(form, ul.lastElementChild);
     input.focus();
@@ -818,11 +859,28 @@
       if (!name) return;
       input.disabled = true;
       providerSelect.disabled = true;
-      await createSession(projectId, name, providerSelect.value);
+      modeSelect.disabled = true;
+      modelInput.disabled = true;
+
+      let providerOptions = undefined;
+      if (providerSelect.value === 'codex') {
+        providerOptions = {};
+        if (modeSelect.value !== 'suggest') {
+          providerOptions.approvalMode = modeSelect.value;
+        }
+        const model = modelInput.value.trim();
+        if (model) {
+          providerOptions.model = model;
+        }
+        // Only send if there are actual options
+        if (Object.keys(providerOptions).length === 0) providerOptions = undefined;
+      }
+
+      await createSession(projectId, name, providerSelect.value, providerOptions);
       form.remove();
     };
 
-    input.onkeydown = async (e) => {
+    const handleKeydown = async (e) => {
       if (e.key === 'Enter') {
         await submit();
       } else if (e.key === 'Escape') {
@@ -830,23 +888,21 @@
       }
     };
 
-    providerSelect.onkeydown = (e) => {
-      if (e.key === 'Enter') submit();
-      else if (e.key === 'Escape') form.remove();
-    };
+    input.onkeydown = handleKeydown;
+    providerSelect.onkeydown = handleKeydown;
+    modeSelect.onkeydown = handleKeydown;
+    modelInput.onkeydown = handleKeydown;
 
-    input.onblur = () => {
-      // Delay to allow clicking the select
+    const handleBlur = () => {
       setTimeout(() => {
         if (!form.contains(document.activeElement)) form.remove();
       }, 200);
     };
 
-    providerSelect.onblur = () => {
-      setTimeout(() => {
-        if (!form.contains(document.activeElement)) form.remove();
-      }, 200);
-    };
+    input.onblur = handleBlur;
+    providerSelect.onblur = handleBlur;
+    modeSelect.onblur = handleBlur;
+    modelInput.onblur = handleBlur;
   }
 
   function startSessionRename(nameEl, sessionId, currentName) {
@@ -907,11 +963,13 @@
     await fetch(`/api/projects/${id}`, { method: 'DELETE' });
   }
 
-  async function createSession(projectId, name, provider = 'claude') {
+  async function createSession(projectId, name, provider = 'claude', providerOptions) {
+    const body = { name, provider };
+    if (providerOptions) body.providerOptions = providerOptions;
     const res = await fetch(`/api/projects/${projectId}/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name, provider }),
+      body: JSON.stringify(body),
     });
     if (!res.ok) {
       const err = await res.json();

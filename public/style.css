@@ -183,9 +183,23 @@ body {
 
 .inline-session-form {
   display: flex;
+  flex-direction: column;
   gap: 4px;
   margin: 4px 0 8px 30px;
   width: calc(100% - 30px);
+}
+
+.inline-session-row {
+  display: flex;
+  gap: 4px;
+}
+
+.inline-codex-options {
+  display: flex;
+  gap: 4px;
+}
+.inline-codex-options.hidden {
+  display: none;
 }
 
 .inline-session-input {

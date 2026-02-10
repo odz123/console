@@ -232,6 +232,39 @@ describe('Store: session CRUD', () => {
     });
     assert.strictEqual(session.provider, 'claude');
   });
+
+  it('createSession stores and retrieves providerOptions', () => {
+    const store = storeWithProject();
+    const opts = { approvalMode: 'full-auto', model: 'o4-mini' };
+    const session = store.createSession({
+      id: 's1', projectId: 'p1', name: 'codex-opts',
+      provider: 'codex', providerOptions: opts,
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.deepStrictEqual(session.providerOptions, opts);
+    assert.strictEqual(session.providerOptions.approvalMode, 'full-auto');
+    assert.strictEqual(session.providerOptions.model, 'o4-mini');
+  });
+
+  it('createSession defaults providerOptions to null', () => {
+    const store = storeWithProject();
+    const session = store.createSession({
+      id: 's1', projectId: 'p1', name: 'no-opts',
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.strictEqual(session.providerOptions, null);
+  });
+
+  it('createSession stores partial providerOptions', () => {
+    const store = storeWithProject();
+    const session = store.createSession({
+      id: 's1', projectId: 'p1', name: 'partial-opts',
+      provider: 'codex', providerOptions: { approvalMode: 'auto-edit' },
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.strictEqual(session.providerOptions.approvalMode, 'auto-edit');
+    assert.strictEqual(session.providerOptions.model, undefined);
+  });
 });
 
 describe('store.getSessionWorktreePaths', () => {

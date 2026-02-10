@@ -96,7 +96,7 @@ export class PtyManager {
     this.shellProcesses = new Map();
   }
 
-  spawn(sessionId, { cwd, resumeId, cols = 80, rows = 24, shell, args, provider = 'claude' }) {
+  spawn(sessionId, { cwd, resumeId, cols = 80, rows = 24, shell, args, provider = 'claude', providerOptions }) {
     if (this.processes.has(sessionId)) {
       throw new Error(`Session ${sessionId} already exists`);
     }
@@ -107,7 +107,22 @@ export class PtyManager {
       cmdArgs = args || [];
     } else if (provider === 'codex') {
       command = 'codex';
-      cmdArgs = [];
+      if (resumeId) {
+        // `codex resume <SESSION_ID>` continues a previous session
+        cmdArgs = ['resume', resumeId];
+      } else {
+        cmdArgs = [];
+        // Approval mode: --full-auto or --ask-for-approval <mode>
+        if (providerOptions?.approvalMode === 'full-auto') {
+          cmdArgs.push('--full-auto');
+        } else if (providerOptions?.approvalMode && providerOptions.approvalMode !== 'suggest') {
+          cmdArgs.push('--ask-for-approval', providerOptions.approvalMode);
+        }
+      }
+      // --model applies to both new and resumed sessions
+      if (providerOptions?.model) {
+        cmdArgs.push('--model', providerOptions.model);
+      }
     } else if (resumeId) {
       command = 'claude';
       cmdArgs = ['--resume', resumeId];
