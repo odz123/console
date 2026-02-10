@@ -170,6 +170,55 @@ describe('Sessions API (scoped to projects)', () => {
     assert.strictEqual(res.status, 400);
   });
 
+  it('PATCH /api/sessions/:id renames a session', async () => {
+    const createRes = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'original-name' }),
+    });
+    const session = await createRes.json();
+
+    const res = await fetch(`${baseUrl}/api/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'renamed-session' }),
+    });
+    assert.strictEqual(res.status, 200);
+    const updated = await res.json();
+    assert.strictEqual(updated.name, 'renamed-session');
+
+    // Verify via GET
+    const listRes = await fetch(`${baseUrl}/api/projects`);
+    const { sessions } = await listRes.json();
+    const found = sessions.find((s) => s.id === session.id);
+    assert.strictEqual(found.name, 'renamed-session');
+  });
+
+  it('PATCH /api/sessions/:id returns 404 for unknown session', async () => {
+    const res = await fetch(`${baseUrl}/api/sessions/nonexistent`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'new-name' }),
+    });
+    assert.strictEqual(res.status, 404);
+  });
+
+  it('PATCH /api/sessions/:id rejects missing name', async () => {
+    const createRes = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'rename-test-2' }),
+    });
+    const session = await createRes.json();
+
+    const res = await fetch(`${baseUrl}/api/sessions/${session.id}`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({}),
+    });
+    assert.strictEqual(res.status, 400);
+  });
+
   it('DELETE /api/sessions/:id removes session', async () => {
     // Create a session first
     const createRes = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {

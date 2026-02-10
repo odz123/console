@@ -605,6 +605,20 @@ export function createServer({ testMode = false } = {}) {
     res.json({ ok: true });
   });
 
+  app.patch('/api/sessions/:id', (req, res) => {
+    const session = store.getSession(req.params.id);
+    if (!session) return res.status(404).json({ error: 'not found' });
+
+    const { name } = req.body;
+    if (!name || typeof name !== 'string' || name.length > MAX_NAME_LENGTH) {
+      return res.status(400).json({ error: `name is required (string, max ${MAX_NAME_LENGTH} chars)` });
+    }
+
+    store.renameSession(req.params.id, name.trim());
+    broadcastState();
+    res.json(store.getSession(req.params.id));
+  });
+
   app.post('/api/sessions/:id/archive', async (req, res) => {
     const session = store.getSession(req.params.id);
     if (!session) return res.status(404).json({ error: 'not found' });

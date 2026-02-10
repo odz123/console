@@ -164,6 +164,17 @@ describe('Store: session CRUD', () => {
     assert.strictEqual(store.updateSession('nonexistent', { status: 'exited' }), undefined);
   });
 
+  it('renameSession updates session name', () => {
+    const store = storeWithProject();
+    store.createSession({
+      id: 's1', projectId: 'p1', name: 'original', branchName: null,
+      worktreePath: null, claudeSessionId: null,
+      status: 'running', createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    store.renameSession('s1', 'renamed');
+    assert.strictEqual(store.getSession('s1').name, 'renamed');
+  });
+
   it('deleteSession removes session', () => {
     const store = storeWithProject();
     store.createSession({

@@ -8,6 +8,12 @@
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
+  <div id="mobile-header">
+    <button id="btn-mobile-sidebar" title="Toggle sidebar">&#9776;</button>
+    <span id="mobile-title">Claude Console</span>
+    <button id="btn-mobile-panel" title="Toggle panel">&#9881;</button>
+  </div>
+  <div id="mobile-overlay" class="hidden"></div>
   <div id="app">
     <aside id="sidebar">
       <div id="sidebar-header">
@@ -16,6 +22,7 @@
       </div>
       <div id="project-list"></div>
     </aside>
+    <div id="sidebar-divider"></div>
     <main id="terminal-container">
       <div id="tab-bar">
         <div id="tab-list"></div>
@@ -39,6 +46,7 @@
         <div class="right-panel-header">
           <span class="right-panel-title">Files</span>
           <span id="right-panel-path"></span>
+          <button id="btn-refresh-file-tree" class="panel-toggle" title="Refresh file tree">&#x21BB;</button>
           <button id="btn-toggle-file-tree" class="panel-toggle" title="Collapse file tree">&#x25BC;</button>
         </div>
         <div id="file-tree" class="file-tree-container"></div>
