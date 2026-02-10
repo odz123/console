@@ -847,6 +847,7 @@ export function createServer({ testMode = false } = {}) {
       sessions: sessions.map((s) => ({
         ...s,
         alive: manager.isAlive(s.id),
+        idle: manager.isIdle(s.id),
       })),
     });
     for (const ws of clients) {
@@ -921,6 +922,13 @@ export function createServer({ testMode = false } = {}) {
       }
     });
 
+    manager.onIdleChange(session.id, (idle) => {
+      const msg = JSON.stringify({ type: 'session-idle', sessionId: session.id, idle });
+      for (const ws of clients) {
+        safeSend(ws, msg);
+      }
+    });
+
     if (existingJsonlFiles) {
       const claudeProjectDir = getClaudeProjectDir(cwd);
       const MAX_POLL_MS = 60_000; // give up after 60s
@@ -959,6 +967,7 @@ export function createServer({ testMode = false } = {}) {
       sessions: sessions.map((s) => ({
         ...s,
         alive: manager.isAlive(s.id),
+        idle: manager.isIdle(s.id),
       })),
     });
   });

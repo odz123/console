@@ -11,19 +11,46 @@ class PtyProcess extends EventEmitter {
     this.buffer = [];
     this.bufferSize = 0;
     this.alive = true;
+    this.idle = false;
+    this.idleTimer = null;
+
+    this._scheduleIdleCheck();
 
     this._onPtyData = (data) => {
+      if (this.idle) {
+        this.idle = false;
+        this.emit('idle-change', false);
+      }
+      this._scheduleIdleCheck();
       this._pushToBuffer(data);
       this.emit('data', data);
     };
 
     this._onPtyExit = ({ exitCode }) => {
+      this._clearIdleTimer();
       this.alive = false;
       this.emit('exit', exitCode);
     };
 
     this.pty.onData(this._onPtyData);
     this.pty.onExit(this._onPtyExit);
+  }
+
+  _scheduleIdleCheck() {
+    this._clearIdleTimer();
+    this.idleTimer = setTimeout(() => {
+      if (!this.idle && this.alive) {
+        this.idle = true;
+        this.emit('idle-change', true);
+      }
+    }, 1500);
+  }
+
+  _clearIdleTimer() {
+    if (this.idleTimer) {
+      clearTimeout(this.idleTimer);
+      this.idleTimer = null;
+    }
   }
 
   _pushToBuffer(data) {
@@ -56,6 +83,7 @@ class PtyProcess extends EventEmitter {
   }
 
   _cleanup() {
+    this._clearIdleTimer();
     this.buffer.length = 0;
     this.bufferSize = 0;
     this.removeAllListeners();
@@ -154,6 +182,21 @@ export class PtyManager {
   isAlive(sessionId) {
     const proc = this.processes.get(sessionId);
     return proc ? proc.alive : false;
+  }
+
+  isIdle(sessionId) {
+    const proc = this.processes.get(sessionId);
+    return proc ? proc.idle : true;
+  }
+
+  onIdleChange(sessionId, callback) {
+    const proc = this.processes.get(sessionId);
+    if (proc) proc.on('idle-change', callback);
+  }
+
+  offIdleChange(sessionId, callback) {
+    const proc = this.processes.get(sessionId);
+    if (proc) proc.off('idle-change', callback);
   }
 
   destroyAll() {
