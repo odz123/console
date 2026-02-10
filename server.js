@@ -537,6 +537,17 @@ export function createServer({ testMode = false } = {}) {
     const filePath = req.query.path;
     const isStaged = req.query.staged === 'true';
 
+    // Validate path doesn't contain traversal (consistent with stage/discard)
+    if (filePath) {
+      if (typeof filePath !== 'string') {
+        return res.status(400).json({ error: 'path must be a string' });
+      }
+      const normalized = path.normalize(filePath);
+      if (path.isAbsolute(filePath) || normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+        return res.status(403).json({ error: 'Path traversal not allowed' });
+      }
+    }
+
     try {
       const args = ['diff', '--no-color'];
       if (isStaged) args.push('--cached');
@@ -1652,6 +1663,10 @@ export function createServer({ testMode = false } = {}) {
 
     ws.on('close', () => {
       clients.delete(ws);
+      if (nudgeTimer) {
+        clearTimeout(nudgeTimer);
+        nudgeTimer = null;
+      }
       if (attachedSessionId && dataListener) {
         manager.offData(attachedSessionId, dataListener);
       }

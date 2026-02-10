@@ -157,11 +157,17 @@
     const buttons = document.createElement('div');
     buttons.className = 'confirm-buttons';
 
+    // Shared cleanup: remove overlay and keydown listener
+    const cleanup = () => {
+      document.removeEventListener('keydown', handleEscape);
+      overlay.remove();
+    };
+
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'confirm-cancel';
     cancelBtn.textContent = 'Cancel';
     cancelBtn.onclick = () => {
-      overlay.remove();
+      cleanup();
       if (onCancel) onCancel();
     };
 
@@ -169,7 +175,7 @@
     confirmBtn.className = 'confirm-ok';
     confirmBtn.textContent = 'Delete Anyway';
     confirmBtn.onclick = () => {
-      overlay.remove();
+      cleanup();
       if (onConfirm) onConfirm();
     };
 
@@ -184,7 +190,7 @@
     // Close on overlay click
     overlay.onclick = (e) => {
       if (e.target === overlay) {
-        overlay.remove();
+        cleanup();
         if (onCancel) onCancel();
       }
     };
@@ -192,8 +198,7 @@
     // Close on Escape
     const handleEscape = (e) => {
       if (e.key === 'Escape') {
-        overlay.remove();
-        document.removeEventListener('keydown', handleEscape);
+        cleanup();
         if (onCancel) onCancel();
       }
     };
@@ -1421,7 +1426,8 @@
     if (tabId === 'claude') {
       // Show terminal, hide file viewer
       termWrapper.style.display = '';
-      termWrapper.style.inset = '32px 0 0 0';
+      const tabH = getComputedStyle(document.documentElement).getPropertyValue('--tab-bar-height') || '32px';
+      termWrapper.style.inset = tabH + ' 0 0 0';
       fileViewer.classList.add('hidden');
       term.focus();
       // Refit terminal synchronously so term.cols/rows are correct before
@@ -1469,10 +1475,13 @@
     let tab;
 
     if (contentType.includes('application/json')) {
-      // Binary file response
+      // JSON response — either a binary file indicator or unexpected payload
       const data = await res.json();
       if (data.isBinary) {
         tab = { id: filePath, filename, fullPath: filePath, content: null, type: 'binary' };
+      } else {
+        showToast('Unsupported file type', 'error');
+        return;
       }
     } else {
       const content = await res.text();
@@ -1620,7 +1629,11 @@
       const res = await fetch(`/api/sessions/${activeSessionId}/git/status`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        gitFileList.innerHTML = `<div class="git-loading">${err.error || 'Failed to load status'}</div>`;
+        const errDiv = document.createElement('div');
+        errDiv.className = 'git-loading';
+        errDiv.textContent = err.error || 'Failed to load status';
+        gitFileList.innerHTML = '';
+        gitFileList.appendChild(errDiv);
         return;
       }
       const data = await res.json();
