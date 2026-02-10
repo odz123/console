@@ -68,8 +68,12 @@
   const fileViewerRefresh = document.getElementById('file-viewer-refresh');
   const fileViewerWrap = document.getElementById('file-viewer-wrap');
   const fileViewerCopy = document.getElementById('file-viewer-copy');
+  const fileViewerEdit = document.getElementById('file-viewer-edit');
+  const fileViewerSave = document.getElementById('file-viewer-save');
+  const fileViewerCancelEdit = document.getElementById('file-viewer-cancel-edit');
   const fileViewerContent = document.getElementById('file-viewer-content');
   let fileViewerWordWrap = false;
+  let fileViewerEditing = false;
 
   // File viewer search refs
   const fvSearchBar = document.getElementById('fv-search-bar');
@@ -151,6 +155,14 @@
 
   // Git status cache for file tree change indicators
   let gitFileStatusMap = new Map(); // filePath -> status letter (M, A, D, ?, etc.)
+
+  // Terminal font size zoom
+  const statusFontSize = document.getElementById('status-font-size');
+  const statusChanges = document.getElementById('status-changes');
+  const DEFAULT_FONT_SIZE = 13;
+  const MIN_FONT_SIZE = 8;
+  const MAX_FONT_SIZE = 24;
+  let termFontSize = DEFAULT_FONT_SIZE;
 
   // --- Helpers ---
   function wsSend(data) {
@@ -1821,6 +1833,7 @@
     activeTabId = tabId;
     renderTabs();
     closeFvSearch();
+    if (fileViewerEditing) exitEditMode(true);
 
     const termWrapper = document.getElementById('terminal-wrapper');
 
@@ -1992,8 +2005,41 @@
     }
   }
 
+  function renderFileViewerBreadcrumb(fullPath) {
+    fileViewerPath.innerHTML = '';
+    const parts = fullPath.split('/');
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'fv-path-sep';
+        sep.textContent = '/';
+        fileViewerPath.appendChild(sep);
+      }
+      const segment = document.createElement('span');
+      segment.className = 'fv-path-segment';
+      segment.textContent = parts[i];
+      if (i < parts.length - 1) {
+        // Clicking a directory segment expands it in the file tree
+        const dirPath = parts.slice(0, i + 1).join('/');
+        segment.classList.add('fv-path-clickable');
+        segment.onclick = () => {
+          if (!expandedDirs.has(dirPath)) {
+            expandedDirs.add(dirPath);
+            renderFileTreeDir(fileTreeEl, '', 0);
+          }
+          // Switch to files tab if on git tab
+          if (activeRightPanelTab !== 'files') {
+            const filesTab = rightPanelTabs.querySelector('[data-rp-tab="files"]');
+            if (filesTab) filesTab.click();
+          }
+        };
+      }
+      fileViewerPath.appendChild(segment);
+    }
+  }
+
   function renderFileContent(tab) {
-    fileViewerPath.textContent = tab.fullPath;
+    renderFileViewerBreadcrumb(tab.fullPath);
     fileViewerContent.innerHTML = '';
     fileViewerContent.className = '';
 
@@ -2090,6 +2136,84 @@
       () => showToast('Copied to clipboard', 'info', 2000),
       () => showToast('Failed to copy', 'error', 2000)
     );
+  };
+
+  // --- Inline file editing ---
+
+  function enterEditMode() {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || !tab.content || tab.type === 'binary' || tab.type === 'diff') return;
+
+    fileViewerEditing = true;
+    fileViewerEdit.classList.add('hidden');
+    fileViewerSave.classList.remove('hidden');
+    fileViewerCancelEdit.classList.remove('hidden');
+
+    // Replace content with textarea
+    fileViewerContent.innerHTML = '';
+    fileViewerContent.className = 'editing';
+    const textarea = document.createElement('textarea');
+    textarea.id = 'fv-editor';
+    textarea.className = 'fv-editor';
+    textarea.value = tab.content;
+    textarea.spellcheck = false;
+    fileViewerContent.appendChild(textarea);
+    textarea.focus();
+  }
+
+  function exitEditMode(restoreContent) {
+    fileViewerEditing = false;
+    fileViewerEdit.classList.remove('hidden');
+    fileViewerSave.classList.add('hidden');
+    fileViewerCancelEdit.classList.add('hidden');
+
+    if (restoreContent) {
+      const tab = openTabs.find(t => t.id === activeTabId);
+      if (tab) renderFileContent(tab);
+    }
+  }
+
+  fileViewerEdit.onclick = enterEditMode;
+  fileViewerCancelEdit.onclick = () => exitEditMode(true);
+
+  fileViewerSave.onclick = async () => {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab) return;
+
+    const editor = document.getElementById('fv-editor');
+    if (!editor) return;
+
+    const newContent = editor.value;
+    fileViewerSave.disabled = true;
+    fileViewerSave.textContent = 'Saving\u2026';
+
+    try {
+      const res = await fetch('/api/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: activeSessionId,
+          path: tab.fullPath,
+          content: newContent,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to save file', 'error');
+        return;
+      }
+
+      // Update tab content and exit edit mode
+      tab.content = newContent;
+      showToast('File saved', 'success', 2000);
+      exitEditMode(true);
+    } catch {
+      showToast('Network error saving file', 'error');
+    } finally {
+      fileViewerSave.disabled = false;
+      fileViewerSave.textContent = 'Save';
+    }
   };
 
   // --- File viewer search ---
@@ -2307,6 +2431,9 @@
     for (const f of data.untracked) gitFileStatusMap.set(f, '?');
     // Update file tree badges
     applyFileTreeGitBadges();
+
+    // Update status bar changes counter
+    updateStatusChangesCount(data);
 
     // Enable/disable commit button based on staged files
     btnGitCommit.disabled = data.staged.length === 0;
@@ -3044,6 +3171,23 @@
       return;
     }
 
+    // Ctrl+= / Ctrl+- / Ctrl+0 — font size zoom
+    if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+      e.preventDefault();
+      setTermFontSize(termFontSize + 1);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+      e.preventDefault();
+      setTermFontSize(termFontSize - 1);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+      e.preventDefault();
+      setTermFontSize(DEFAULT_FONT_SIZE);
+      return;
+    }
+
     // Ctrl+K — command palette (works from anywhere)
     if (e.key === 'k' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -3383,26 +3527,98 @@
     statusRestart.textContent = 'Restart';
   };
 
-  // --- Copy CLI resume command ---
+  // --- Session info popover ---
 
-  statusCopyCli.onclick = () => {
+  statusCopyCli.onclick = (e) => {
+    e.stopPropagation();
+    toggleSessionInfoPopover();
+  };
+
+  function toggleSessionInfoPopover() {
+    const existing = document.getElementById('session-info-popover');
+    if (existing) { existing.remove(); return; }
+
     if (!activeSessionId) return;
     const session = sessions.find(s => s.id === activeSessionId);
     if (!session) return;
-    const resumeId = session.claudeSessionId;
     const project = projects.find(p => p.id === session.projectId);
-    let cmd;
-    if (session.provider === 'codex') {
-      cmd = resumeId ? `codex --resume ${resumeId}` : 'codex';
-    } else {
-      cmd = resumeId ? `claude --resume ${resumeId}` : 'claude';
+
+    const popover = document.createElement('div');
+    popover.id = 'session-info-popover';
+    popover.className = 'session-info-popover';
+
+    const resumeId = session.claudeSessionId;
+    const cliCmd = session.provider === 'codex'
+      ? (resumeId ? `codex --resume ${resumeId}` : 'codex')
+      : (resumeId ? `claude --resume ${resumeId}` : 'claude');
+    const fullCmd = project ? `${cliCmd} --cwd ${project.cwd}` : cliCmd;
+
+    const rows = [
+      { label: 'Session', value: session.name || 'Untitled' },
+      { label: 'Project', value: project ? project.name : 'Unknown' },
+      { label: 'Branch', value: session.branchName || 'none' },
+      { label: 'Worktree', value: session.worktreePath || 'N/A' },
+      { label: 'Created', value: new Date(session.createdAt).toLocaleString() },
+      { label: 'Status', value: session.alive !== false ? 'Running' : 'Exited' },
+    ];
+
+    let html = '<div class="sip-rows">';
+    for (const r of rows) {
+      html += `<div class="sip-row"><span class="sip-label">${r.label}</span><span class="sip-value">${escapeHtml(r.value)}</span></div>`;
     }
-    if (project) cmd += ` --cwd ${project.cwd}`;
-    navigator.clipboard.writeText(cmd).then(
-      () => showToast('CLI command copied', 'info', 2000),
-      () => showToast('Failed to copy', 'error', 2000)
-    );
-  };
+    html += '</div>';
+    html += `<div class="sip-cli"><code>${escapeHtml(fullCmd)}</code></div>`;
+    html += '<div class="sip-actions"><button class="sip-btn" id="sip-copy-cmd">Copy CLI Command</button></div>';
+
+    popover.innerHTML = html;
+    document.body.appendChild(popover);
+
+    // Position above the CLI button
+    const btnRect = statusCopyCli.getBoundingClientRect();
+    popover.style.bottom = (window.innerHeight - btnRect.top + 4) + 'px';
+    popover.style.right = (window.innerWidth - btnRect.right) + 'px';
+
+    document.getElementById('sip-copy-cmd').onclick = () => {
+      navigator.clipboard.writeText(fullCmd).then(
+        () => showToast('CLI command copied', 'info', 2000),
+        () => showToast('Failed to copy', 'error', 2000)
+      );
+    };
+
+    // Close on click outside
+    const close = (ev) => {
+      if (!popover.contains(ev.target) && ev.target !== statusCopyCli) {
+        popover.remove();
+        document.removeEventListener('mousedown', close);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', close), 0);
+  }
+
+  // --- Status bar changes indicator ---
+
+  function updateStatusChangesCount(data) {
+    if (!statusChanges) return;
+    const total = (data.staged ? data.staged.length : 0) +
+      (data.unstaged ? data.unstaged.length : 0) +
+      (data.untracked ? data.untracked.length : 0);
+    if (total > 0) {
+      statusChanges.classList.remove('hidden');
+      statusChanges.innerHTML =
+        `<span class="status-changes-icon">\u25CF</span> ${total} change${total === 1 ? '' : 's'}`;
+    } else {
+      statusChanges.classList.add('hidden');
+      statusChanges.textContent = '';
+    }
+  }
+
+  if (statusChanges) {
+    statusChanges.onclick = () => {
+      // Switch to Git tab in the right panel
+      const gitTab = rightPanelTabs.querySelector('[data-rp-tab="git"]');
+      if (gitTab) gitTab.click();
+    };
+  }
 
   // --- Git tab notification badge ---
 
@@ -3418,6 +3634,31 @@
     } else if (!show && existing) {
       existing.remove();
     }
+  }
+
+  // --- Terminal font size zoom ---
+
+  function updateFontSizeDisplay() {
+    if (statusFontSize) {
+      statusFontSize.textContent = `${termFontSize}px`;
+    }
+  }
+
+  if (statusFontSize) {
+    statusFontSize.onclick = () => setTermFontSize(DEFAULT_FONT_SIZE);
+  }
+
+  function setTermFontSize(size) {
+    termFontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, size));
+    if (term) {
+      term.options.fontSize = termFontSize;
+      if (fitAddon) fitAddon.fit();
+    }
+    if (shellTerm) {
+      shellTerm.options.fontSize = termFontSize;
+      if (shellFitAddon) shellFitAddon.fit();
+    }
+    updateFontSizeDisplay();
   }
 
   // --- Focus mode ---
@@ -3553,5 +3794,6 @@
   initTerminal();
   initShellTerminal();
   startSidebarTimeUpdates();
+  updateFontSizeDisplay();
   connect();
 })();

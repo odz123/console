@@ -447,6 +447,95 @@ export function createServer({ testMode = false } = {}) {
     res.type('text/plain').send(content.toString('utf-8'));
   });
 
+  // --- File Write ---
+
+  app.post('/api/file', express.json({ limit: '2mb' }), async (req, res) => {
+    const { sessionId, path: filePath, content } = req.body;
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      return res.status(400).json({ error: 'sessionId is required' });
+    }
+    if (!filePath || typeof filePath !== 'string') {
+      return res.status(400).json({ error: 'path is required' });
+    }
+    if (typeof content !== 'string') {
+      return res.status(400).json({ error: 'content is required' });
+    }
+
+    // Reject absolute paths
+    if (path.isAbsolute(filePath)) {
+      return res.status(403).json({ error: 'Absolute paths not allowed' });
+    }
+
+    // Reject path traversal
+    const normalized = path.normalize(filePath);
+    if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+      return res.status(403).json({ error: 'Path traversal not allowed' });
+    }
+
+    const session = store.getSession(sessionId);
+    if (!session) {
+      return res.status(404).json({ error: 'Session not found' });
+    }
+
+    const project = store.getProject(session.projectId);
+    if (!project) {
+      return res.status(404).json({ error: 'Project not found' });
+    }
+
+    // Resolve worktree root
+    let worktreeRoot;
+    if (session.worktreePath) {
+      try {
+        worktreeRoot = await resolveWorktreePath(project.cwd, session.worktreePath);
+      } catch {
+        return res.status(400).json({ error: 'Invalid worktree path' });
+      }
+    } else {
+      worktreeRoot = project.cwd;
+    }
+
+    const resolved = path.resolve(worktreeRoot, normalized);
+
+    // Symlink-safe: realpath the parent dir and verify under worktree root
+    const parentDir = path.dirname(resolved);
+    let realParent;
+    try {
+      realParent = await fs.promises.realpath(parentDir);
+    } catch {
+      return res.status(404).json({ error: 'Parent directory not found' });
+    }
+
+    let realRoot;
+    try {
+      realRoot = await fs.promises.realpath(worktreeRoot);
+    } catch {
+      return res.status(400).json({ error: 'Worktree root not found' });
+    }
+
+    const finalPath = path.join(realParent, path.basename(resolved));
+    if (!finalPath.startsWith(realRoot + path.sep) && finalPath !== realRoot) {
+      return res.status(403).json({ error: 'Path escapes worktree' });
+    }
+
+    // Only overwrite existing files (don't create new ones)
+    try {
+      const stat = await fs.promises.stat(finalPath);
+      if (!stat.isFile()) {
+        return res.status(400).json({ error: 'Not a file' });
+      }
+    } catch {
+      return res.status(404).json({ error: 'File not found — can only edit existing files' });
+    }
+
+    try {
+      await fs.promises.writeFile(finalPath, content, 'utf-8');
+      res.json({ ok: true });
+    } catch (e) {
+      return res.status(500).json({ error: 'Failed to write file' });
+    }
+  });
+
   // --- Helper: resolve session worktree cwd ---
 
   async function resolveSessionCwd(sessionId) {

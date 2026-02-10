@@ -42,6 +42,9 @@
         <div id="file-viewer-toolbar">
           <span id="file-viewer-path"></span>
           <div class="file-viewer-actions">
+            <button id="file-viewer-edit" class="fv-btn" title="Edit file">Edit</button>
+            <button id="file-viewer-save" class="fv-btn fv-btn-save hidden" title="Save changes">Save</button>
+            <button id="file-viewer-cancel-edit" class="fv-btn hidden" title="Cancel editing">Cancel</button>
             <button id="file-viewer-wrap" class="fv-btn" title="Toggle word wrap">Wrap</button>
             <button id="file-viewer-copy" class="fv-btn" title="Copy file content">Copy</button>
             <button id="file-viewer-refresh" title="Refresh">Refresh</button>
@@ -75,6 +78,9 @@
           <span id="status-branch" class="status-item"></span>
           <span class="status-sep">|</span>
           <span id="status-duration" class="status-item"></span>
+          <span class="status-sep">|</span>
+          <span id="status-font-size" class="status-item status-font-size" title="Font size (Ctrl+/-)"></span>
+          <span id="status-changes" class="status-item status-changes hidden" title="Changed files — click to open git panel"></span>
         </div>
         <div class="status-bar-right">
           <span id="status-activity" class="status-item"></span>
@@ -188,6 +194,8 @@
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find in file</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Focus mode</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>=</kbd>/<kbd>-</kbd><span>Zoom in / out</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>0</kbd><span>Reset zoom</span></div>
           <div class="shortcut-row"><kbd>?</kbd><span>Show shortcuts</span></div>
         </div>
         <div class="shortcuts-section">
