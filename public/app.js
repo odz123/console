@@ -691,7 +691,7 @@
           sessionIdleState.delete(s.id);
         }
 
-        // Session info container (name + optional branch badge)
+        // Session info container (name + optional badges)
         const infoContainer = document.createElement('div');
         infoContainer.className = 'session-info';
 
@@ -703,6 +703,14 @@
           startSessionRename(sName, s.id, s.name);
         };
         infoContainer.appendChild(sName);
+
+        // Provider badge (show for non-default providers)
+        if (s.provider && s.provider !== 'claude') {
+          const providerBadge = document.createElement('span');
+          providerBadge.className = 'provider-badge provider-' + s.provider;
+          providerBadge.textContent = s.provider.charAt(0).toUpperCase() + s.provider.slice(1);
+          infoContainer.appendChild(providerBadge);
+        }
 
         // Branch badge (if session has worktree)
         if (s.branchName) {
@@ -750,7 +758,7 @@
         li.appendChild(actions);
 
         li.onclick = async () => {
-          if (!s.alive && s.claudeSessionId) {
+          if (!s.alive && (s.claudeSessionId || s.provider === 'codex')) {
             await restartSession(s.id);
           }
           attachSession(s.id);
@@ -779,30 +787,65 @@
 
   function showInlineSessionInput(ul, projectId) {
     // Remove any existing inline input
-    const existing = ul.querySelector('.inline-session-input');
+    const existing = ul.querySelector('.inline-session-form');
     if (existing) { existing.remove(); return; }
+
+    const form = document.createElement('div');
+    form.className = 'inline-session-form';
 
     const input = document.createElement('input');
     input.className = 'inline-session-input';
     input.type = 'text';
     input.placeholder = 'Session name...';
-    ul.insertBefore(input, ul.lastElementChild);
+
+    const providerSelect = document.createElement('select');
+    providerSelect.className = 'inline-provider-select';
+    for (const p of ['claude', 'codex']) {
+      const opt = document.createElement('option');
+      opt.value = p;
+      opt.textContent = p.charAt(0).toUpperCase() + p.slice(1);
+      providerSelect.appendChild(opt);
+    }
+
+    form.appendChild(input);
+    form.appendChild(providerSelect);
+
+    ul.insertBefore(form, ul.lastElementChild);
     input.focus();
+
+    const submit = async () => {
+      const name = input.value.trim();
+      if (!name) return;
+      input.disabled = true;
+      providerSelect.disabled = true;
+      await createSession(projectId, name, providerSelect.value);
+      form.remove();
+    };
 
     input.onkeydown = async (e) => {
       if (e.key === 'Enter') {
-        const name = input.value.trim();
-        if (!name) return;
-        input.disabled = true;
-        await createSession(projectId, name);
-        input.remove();
+        await submit();
       } else if (e.key === 'Escape') {
-        input.remove();
+        form.remove();
       }
     };
 
+    providerSelect.onkeydown = (e) => {
+      if (e.key === 'Enter') submit();
+      else if (e.key === 'Escape') form.remove();
+    };
+
     input.onblur = () => {
-      setTimeout(() => input.remove(), 150);
+      // Delay to allow clicking the select
+      setTimeout(() => {
+        if (!form.contains(document.activeElement)) form.remove();
+      }, 200);
+    };
+
+    providerSelect.onblur = () => {
+      setTimeout(() => {
+        if (!form.contains(document.activeElement)) form.remove();
+      }, 200);
     };
   }
 
@@ -864,11 +907,11 @@
     await fetch(`/api/projects/${id}`, { method: 'DELETE' });
   }
 
-  async function createSession(projectId, name) {
+  async function createSession(projectId, name, provider = 'claude') {
     const res = await fetch(`/api/projects/${projectId}/sessions`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, provider }),
     });
     if (!res.ok) {
       const err = await res.json();
@@ -1264,12 +1307,14 @@
     tabBar.classList.add('visible');
     tabList.innerHTML = '';
 
-    // Claude tab (always first, never closeable)
+    // Provider tab (always first, never closeable) — label matches active session's provider
+    const activeSession = sessions.find((s) => s.id === activeSessionId);
+    const providerName = activeSession && activeSession.provider === 'codex' ? 'Codex' : 'Claude';
     const claudeTab = document.createElement('div');
     claudeTab.className = 'tab' + (activeTabId === 'claude' ? ' active' : '');
     const claudeLabel = document.createElement('span');
     claudeLabel.className = 'tab-label';
-    claudeLabel.textContent = 'Claude';
+    claudeLabel.textContent = providerName;
     claudeTab.appendChild(claudeLabel);
     claudeTab.onclick = () => switchTab('claude');
     tabList.appendChild(claudeTab);

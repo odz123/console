@@ -150,6 +150,30 @@ describe('Sessions API (scoped to projects)', () => {
     assert.strictEqual(session.name, 'test-session');
     assert.strictEqual(session.status, 'running');
     assert.strictEqual(session.alive, true);
+    assert.strictEqual(session.provider, 'claude', 'default provider should be claude');
+  });
+
+  it('POST /api/projects/:id/sessions creates a codex session', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'codex-session', provider: 'codex' }),
+    });
+    assert.strictEqual(res.status, 201);
+    const session = await res.json();
+    assert.ok(session.id);
+    assert.strictEqual(session.name, 'codex-session');
+    assert.strictEqual(session.provider, 'codex');
+    assert.strictEqual(session.status, 'running');
+  });
+
+  it('POST /api/projects/:id/sessions rejects invalid provider', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'bad-provider', provider: 'invalid' }),
+    });
+    assert.strictEqual(res.status, 400);
   });
 
   it('POST /api/projects/:id/sessions returns 404 for unknown project', async () => {

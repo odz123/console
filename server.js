@@ -884,8 +884,9 @@ export function createServer({ testMode = false } = {}) {
     // Claude CLI stores conversations as {sessionId}.jsonl in a directory derived from
     // the realpath of the cwd: replace '/' and '.' with '-'.
     // Snapshot BEFORE spawn to avoid race where Claude creates the file instantly.
+    // Only applies to Claude provider sessions.
     let existingJsonlFiles;
-    if (!testMode && !session.claudeSessionId) {
+    if (!testMode && !session.claudeSessionId && session.provider !== 'codex') {
       const claudeProjectDir = getClaudeProjectDir(cwd);
 
       existingJsonlFiles = new Set();
@@ -900,9 +901,10 @@ export function createServer({ testMode = false } = {}) {
 
     const spawnOpts = {
       cwd,
+      provider: session.provider || 'claude',
       ...(testMode
         ? { shell: '/bin/bash', args: ['-c', 'sleep 5'] }
-        : session.claudeSessionId
+        : session.provider !== 'codex' && session.claudeSessionId
           ? { resumeId: session.claudeSessionId }
           : {}),
     };
@@ -1044,13 +1046,18 @@ export function createServer({ testMode = false } = {}) {
 
   // --- Sessions REST API ---
 
+  const VALID_PROVIDERS = ['claude', 'codex'];
+
   app.post('/api/projects/:id/sessions', async (req, res) => {
     const project = store.getProject(req.params.id);
     if (!project) return res.status(404).json({ error: 'project not found' });
 
-    const { name } = req.body;
+    const { name, provider = 'claude' } = req.body;
     if (!name || typeof name !== 'string' || name.length > MAX_NAME_LENGTH) {
       return res.status(400).json({ error: `name is required (string, max ${MAX_NAME_LENGTH} chars)` });
+    }
+    if (!VALID_PROVIDERS.includes(provider)) {
+      return res.status(400).json({ error: `provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
     }
 
     // Enforce resource limits
@@ -1106,6 +1113,7 @@ export function createServer({ testMode = false } = {}) {
       branchName,
       worktreePath,
       claudeSessionId: null,
+      provider,
       status: 'running',
       createdAt: new Date().toISOString(),
     });
@@ -1579,8 +1587,10 @@ export function createServer({ testMode = false } = {}) {
     // First pass: resolve the latest Claude session ID for every resumable session.
     // This handles: null IDs (polling failed), stale IDs (/clear created new JSONL),
     // deleted JSONL files, and exited sessions that can be revived.
+    // Only applies to Claude provider sessions — Codex sessions don't use JSONL.
     for (const session of sessions) {
       if (session.status !== 'running' && session.status !== 'exited') continue;
+      if (session.provider === 'codex') continue;
 
       const project = store.getProject(session.projectId);
       if (!project) continue;
@@ -1645,9 +1655,14 @@ export function createServer({ testMode = false } = {}) {
       }
     }
 
-    // Second pass: resume sessions that have a claudeSessionId
+    // Second pass: resume sessions that have a claudeSessionId (Claude only).
+    // Codex sessions cannot be resumed — mark them as exited.
     const updatedSessions = store.getAll().sessions;
     for (const session of updatedSessions) {
+      if (session.status === 'running' && session.provider === 'codex') {
+        store.updateSession(session.id, { status: 'exited' });
+        continue;
+      }
       if (session.status === 'running' && session.claudeSessionId) {
         const project = store.getProject(session.projectId);
         if (!project) {
