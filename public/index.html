@@ -44,12 +44,35 @@
     <aside id="right-panel" class="hidden">
       <div id="file-tree-section">
         <div class="right-panel-header">
-          <span class="right-panel-title">Files</span>
+          <div id="right-panel-tabs">
+            <button class="rp-tab active" data-rp-tab="files">Files</button>
+            <button class="rp-tab" data-rp-tab="git">Git</button>
+          </div>
           <span id="right-panel-path"></span>
           <button id="btn-refresh-file-tree" class="panel-toggle" title="Refresh file tree">&#x21BB;</button>
           <button id="btn-toggle-file-tree" class="panel-toggle" title="Collapse file tree">&#x25BC;</button>
         </div>
         <div id="file-tree" class="file-tree-container"></div>
+        <div id="git-panel" class="git-panel hidden">
+          <div id="git-branch-bar" class="git-branch-bar">
+            <span id="git-branch-name" class="git-branch-name"></span>
+            <span id="git-ahead-behind" class="git-ahead-behind"></span>
+            <button id="btn-git-merge" class="git-merge-btn" title="Merge branch into main">Merge to Main</button>
+            <button id="btn-git-refresh" class="panel-toggle" title="Refresh status">&#x21BB;</button>
+          </div>
+          <div id="git-commit-form" class="git-commit-form">
+            <input id="git-commit-message" type="text" placeholder="Commit message..." maxlength="500">
+            <button id="btn-git-commit" class="git-commit-btn" disabled>Commit</button>
+          </div>
+          <div id="git-file-list" class="git-file-list"></div>
+          <div id="git-log-section" class="git-log-section collapsed">
+            <div class="git-log-header">
+              <span class="git-log-title">History</span>
+              <button id="btn-git-log-toggle" class="panel-toggle" title="Toggle log">&#x25B6;</button>
+            </div>
+            <div id="git-log-list" class="git-log-list"></div>
+          </div>
+        </div>
       </div>
       <div id="right-panel-divider"></div>
       <div id="shell-section">

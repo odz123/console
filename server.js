@@ -6,7 +6,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
+import { execFile } from 'node:child_process';
+import { promisify } from 'node:util';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+
+const execFileAsync = promisify(execFile);
 import { PtyManager } from './pty-manager.js';
 import { createStore } from './store.js';
 import {
@@ -273,6 +277,395 @@ export function createServer({ testMode = false } = {}) {
     }
 
     res.type('text/plain').send(content.toString('utf-8'));
+  });
+
+  // --- Helper: resolve session worktree cwd ---
+
+  async function resolveSessionCwd(sessionId) {
+    const session = store.getSession(sessionId);
+    if (!session) return { error: 'Session not found', status: 404 };
+
+    const project = store.getProject(session.projectId);
+    if (!project) return { error: 'Project not found', status: 404 };
+
+    let cwd = project.cwd;
+    if (session.worktreePath) {
+      try {
+        cwd = await resolveWorktreePath(project.cwd, session.worktreePath);
+      } catch {
+        return { error: 'Invalid worktree path', status: 400 };
+      }
+    }
+
+    return { cwd, session, project };
+  }
+
+  // --- Git API ---
+
+  app.get('/api/sessions/:id/git/status', async (req, res) => {
+    const result = await resolveSessionCwd(req.params.id);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+
+    const { cwd } = result;
+
+    try {
+      // Get current branch
+      let branch = '';
+      try {
+        const { stdout } = await execFileAsync('git', ['rev-parse', '--abbrev-ref', 'HEAD'], { cwd });
+        branch = stdout.trim();
+      } catch {
+        branch = 'HEAD (detached)';
+      }
+
+      // Get porcelain status
+      const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-uall'], { cwd });
+
+      const staged = [];
+      const unstaged = [];
+      const untracked = [];
+
+      for (const line of stdout.split('\n')) {
+        if (!line) continue;
+        const x = line[0]; // index (staged) status
+        const y = line[1]; // worktree (unstaged) status
+        const filePath = line.slice(3);
+
+        if (x === '?' && y === '?') {
+          untracked.push(filePath);
+          continue;
+        }
+
+        // Staged changes (index column)
+        if (x !== ' ' && x !== '?') {
+          staged.push({ path: filePath, status: x });
+        }
+
+        // Unstaged changes (worktree column)
+        if (y !== ' ' && y !== '?') {
+          unstaged.push({ path: filePath, status: y });
+        }
+      }
+
+      // Get ahead/behind info
+      let ahead = 0;
+      let behind = 0;
+      try {
+        const { stdout: abOut } = await execFileAsync(
+          'git', ['rev-list', '--left-right', '--count', `@{upstream}...HEAD`],
+          { cwd }
+        );
+        const parts = abOut.trim().split(/\s+/);
+        behind = parseInt(parts[0], 10) || 0;
+        ahead = parseInt(parts[1], 10) || 0;
+      } catch {
+        // No upstream configured
+      }
+
+      res.json({ branch, staged, unstaged, untracked, ahead, behind });
+    } catch (e) {
+      res.status(500).json({ error: `Git status failed: ${e.message}` });
+    }
+  });
+
+  app.get('/api/sessions/:id/git/diff', async (req, res) => {
+    const result = await resolveSessionCwd(req.params.id);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+
+    const { cwd } = result;
+    const filePath = req.query.path;
+    const isStaged = req.query.staged === 'true';
+
+    try {
+      const args = ['diff', '--no-color'];
+      if (isStaged) args.push('--cached');
+      if (filePath) args.push('--', filePath);
+
+      const { stdout } = await execFileAsync('git', args, { cwd, maxBuffer: 1024 * 1024 });
+      res.json({ diff: stdout });
+    } catch (e) {
+      res.status(500).json({ error: `Git diff failed: ${e.message}` });
+    }
+  });
+
+  app.post('/api/sessions/:id/git/stage', async (req, res) => {
+    const result = await resolveSessionCwd(req.params.id);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+
+    const { cwd } = result;
+    const { paths, all } = req.body;
+
+    if (!all && (!Array.isArray(paths) || paths.length === 0)) {
+      return res.status(400).json({ error: 'paths array or all=true is required' });
+    }
+
+    // Validate paths don't contain traversal
+    if (paths) {
+      for (const p of paths) {
+        if (typeof p !== 'string') {
+          return res.status(400).json({ error: 'Each path must be a string' });
+        }
+        const normalized = path.normalize(p);
+        if (path.isAbsolute(p) || normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+          return res.status(403).json({ error: 'Path traversal not allowed' });
+        }
+      }
+    }
+
+    try {
+      const args = ['add'];
+      if (all) {
+        args.push('-A');
+      } else {
+        args.push('--', ...paths);
+      }
+      await execFileAsync('git', args, { cwd });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: `Git stage failed: ${e.message}` });
+    }
+  });
+
+  app.post('/api/sessions/:id/git/unstage', async (req, res) => {
+    const result = await resolveSessionCwd(req.params.id);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+
+    const { cwd } = result;
+    const { paths, all } = req.body;
+
+    if (!all && (!Array.isArray(paths) || paths.length === 0)) {
+      return res.status(400).json({ error: 'paths array or all=true is required' });
+    }
+
+    // Validate paths
+    if (paths) {
+      for (const p of paths) {
+        if (typeof p !== 'string') {
+          return res.status(400).json({ error: 'Each path must be a string' });
+        }
+        const normalized = path.normalize(p);
+        if (path.isAbsolute(p) || normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+          return res.status(403).json({ error: 'Path traversal not allowed' });
+        }
+      }
+    }
+
+    try {
+      const args = ['reset', 'HEAD'];
+      if (!all && paths) {
+        args.push('--', ...paths);
+      }
+      await execFileAsync('git', args, { cwd });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: `Git unstage failed: ${e.message}` });
+    }
+  });
+
+  app.post('/api/sessions/:id/git/discard', async (req, res) => {
+    const result = await resolveSessionCwd(req.params.id);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+
+    const { cwd } = result;
+    const { paths } = req.body;
+
+    if (!Array.isArray(paths) || paths.length === 0) {
+      return res.status(400).json({ error: 'paths array is required' });
+    }
+
+    // Validate paths
+    for (const p of paths) {
+      if (typeof p !== 'string') {
+        return res.status(400).json({ error: 'Each path must be a string' });
+      }
+      const normalized = path.normalize(p);
+      if (path.isAbsolute(p) || normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+        return res.status(403).json({ error: 'Path traversal not allowed' });
+      }
+    }
+
+    try {
+      await execFileAsync('git', ['checkout', '--', ...paths], { cwd });
+      res.json({ ok: true });
+    } catch (e) {
+      res.status(500).json({ error: `Git discard failed: ${e.message}` });
+    }
+  });
+
+  app.post('/api/sessions/:id/git/commit', async (req, res) => {
+    const result = await resolveSessionCwd(req.params.id);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+
+    const { cwd } = result;
+    const { message } = req.body;
+
+    if (!message || typeof message !== 'string' || !message.trim()) {
+      return res.status(400).json({ error: 'Commit message is required' });
+    }
+
+    if (message.length > 5000) {
+      return res.status(400).json({ error: 'Commit message too long (max 5000 chars)' });
+    }
+
+    try {
+      // Check if there's anything staged
+      const { stdout: statusOut } = await execFileAsync('git', ['diff', '--cached', '--name-only'], { cwd });
+      if (!statusOut.trim()) {
+        return res.status(400).json({ error: 'Nothing staged to commit' });
+      }
+
+      await execFileAsync('git', ['-c', 'commit.gpgsign=false', 'commit', '-m', message], { cwd });
+
+      // Get the new commit info
+      const { stdout: logOut } = await execFileAsync(
+        'git', ['log', '-1', '--format=%H%n%h%n%s%n%an%n%aI'],
+        { cwd }
+      );
+      const [hash, shortHash, subject, author, date] = logOut.trim().split('\n');
+
+      res.json({ ok: true, commit: { hash, shortHash, message: subject, author, date } });
+    } catch (e) {
+      res.status(500).json({ error: `Git commit failed: ${e.stderr || e.message}` });
+    }
+  });
+
+  app.post('/api/sessions/:id/git/merge-to-main', async (req, res) => {
+    const result = await resolveSessionCwd(req.params.id);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+
+    const { cwd, session, project } = result;
+
+    if (!session.branchName) {
+      return res.status(400).json({ error: 'Session has no branch', code: 'NO_BRANCH' });
+    }
+
+    const fullBranchName = `claude/${session.branchName}`;
+
+    try {
+      // Check worktree is clean
+      const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], { cwd });
+      if (statusOut.trim()) {
+        return res.status(400).json({
+          error: 'Worktree has uncommitted changes. Commit or discard before merging.',
+          code: 'DIRTY_WORKTREE',
+        });
+      }
+
+      // Detect default branch from project root
+      let defaultBranch;
+      try {
+        // Try symbolic-ref for the remote HEAD
+        const { stdout: symRef } = await execFileAsync(
+          'git', ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+          { cwd: project.cwd }
+        );
+        defaultBranch = symRef.trim().replace('refs/remotes/origin/', '');
+      } catch {
+        // Fall back: check for common branch names
+        for (const candidate of ['main', 'master']) {
+          try {
+            await execFileAsync('git', ['rev-parse', '--verify', candidate], { cwd: project.cwd });
+            defaultBranch = candidate;
+            break;
+          } catch {
+            // try next
+          }
+        }
+      }
+
+      if (!defaultBranch) {
+        return res.status(400).json({
+          error: 'Cannot determine default branch (main/master). Ensure one exists.',
+          code: 'NO_DEFAULT_BRANCH',
+        });
+      }
+
+      // Check for any uncommitted changes on the main worktree (project root)
+      // Use -uno to ignore untracked files (e.g. .worktrees/ directory)
+      const { stdout: mainStatus } = await execFileAsync('git', ['status', '--porcelain', '-uno'], { cwd: project.cwd });
+      if (mainStatus.trim()) {
+        return res.status(400).json({
+          error: `The ${defaultBranch} branch has uncommitted changes. Clean it before merging.`,
+          code: 'MAIN_DIRTY',
+        });
+      }
+
+      // Verify the project root is actually on the default branch
+      const { stdout: currentBranch } = await execFileAsync(
+        'git', ['rev-parse', '--abbrev-ref', 'HEAD'],
+        { cwd: project.cwd }
+      );
+      if (currentBranch.trim() !== defaultBranch) {
+        return res.status(400).json({
+          error: `Project root is on '${currentBranch.trim()}', expected '${defaultBranch}'. Cannot merge.`,
+          code: 'WRONG_BRANCH',
+        });
+      }
+
+      // Perform the merge from the project root
+      try {
+        await execFileAsync(
+          'git', ['-c', 'commit.gpgsign=false', 'merge', '--no-edit', fullBranchName],
+          { cwd: project.cwd }
+        );
+      } catch (mergeErr) {
+        // Check if it's a merge conflict (git outputs conflict info to stdout)
+        const mergeOutput = (mergeErr.stdout || '') + (mergeErr.stderr || '') + (mergeErr.message || '');
+        if (mergeOutput.includes('CONFLICT') || mergeOutput.includes('Automatic merge failed') || mergeOutput.includes('Merge conflict')) {
+          // Abort the failed merge to leave the project clean
+          try {
+            await execFileAsync('git', ['merge', '--abort'], { cwd: project.cwd });
+          } catch {
+            // Best effort
+          }
+          return res.status(409).json({
+            error: 'Merge conflict. Resolve conflicts manually or use the shell terminal.',
+            code: 'MERGE_CONFLICT',
+          });
+        }
+        throw mergeErr;
+      }
+
+      // Get the merge commit info
+      const { stdout: logOut } = await execFileAsync(
+        'git', ['log', '-1', '--format=%H%n%h%n%s%n%an%n%aI'],
+        { cwd: project.cwd }
+      );
+      const [hash, shortHash, subject, author, date] = logOut.trim().split('\n');
+
+      res.json({
+        ok: true,
+        mergedBranch: fullBranchName,
+        targetBranch: defaultBranch,
+        commit: { hash, shortHash, message: subject, author, date },
+      });
+    } catch (e) {
+      res.status(500).json({ error: `Merge failed: ${e.stderr || e.message}` });
+    }
+  });
+
+  app.get('/api/sessions/:id/git/log', async (req, res) => {
+    const result = await resolveSessionCwd(req.params.id);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+
+    const { cwd } = result;
+    const limit = Math.min(parseInt(req.query.limit, 10) || 50, 200);
+
+    try {
+      const { stdout } = await execFileAsync(
+        'git', ['log', `--max-count=${limit}`, '--format=%H%x00%h%x00%s%x00%an%x00%aI'],
+        { cwd }
+      );
+
+      const commits = stdout.trim().split('\n').filter(Boolean).map(line => {
+        const [hash, shortHash, message, author, date] = line.split('\x00');
+        return { hash, shortHash, message, author, date };
+      });
+
+      res.json({ commits });
+    } catch (e) {
+      res.status(500).json({ error: `Git log failed: ${e.message}` });
+    }
   });
 
   // --- Helpers ---

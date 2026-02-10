@@ -70,6 +70,21 @@
   const btnRefreshFileTree = document.getElementById('btn-refresh-file-tree');
   const fileTreeSection = document.getElementById('file-tree-section');
 
+  // Git panel refs
+  const gitPanel = document.getElementById('git-panel');
+  const gitBranchName = document.getElementById('git-branch-name');
+  const gitAheadBehind = document.getElementById('git-ahead-behind');
+  const btnGitRefresh = document.getElementById('btn-git-refresh');
+  const btnGitMerge = document.getElementById('btn-git-merge');
+  const gitCommitMessage = document.getElementById('git-commit-message');
+  const btnGitCommit = document.getElementById('btn-git-commit');
+  const gitFileList = document.getElementById('git-file-list');
+  const gitLogList = document.getElementById('git-log-list');
+  const btnGitLogToggle = document.getElementById('btn-git-log-toggle');
+  const rightPanelTabs = document.getElementById('right-panel-tabs');
+  let activeRightPanelTab = 'files';
+  let gitLogExpanded = false;
+
   // --- Helpers ---
   function wsSend(data) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1337,6 +1352,27 @@
       return;
     }
 
+    if (tab.type === 'diff') {
+      fileViewerContent.className = 'diff-view';
+      const lines = tab.content.split('\n');
+      for (const line of lines) {
+        const lineEl = document.createElement('div');
+        lineEl.className = 'diff-line';
+        if (line.startsWith('+') && !line.startsWith('+++')) {
+          lineEl.classList.add('diff-add');
+        } else if (line.startsWith('-') && !line.startsWith('---')) {
+          lineEl.classList.add('diff-del');
+        } else if (line.startsWith('@@')) {
+          lineEl.classList.add('diff-hunk');
+        } else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
+          lineEl.classList.add('diff-header');
+        }
+        lineEl.textContent = line;
+        fileViewerContent.appendChild(lineEl);
+      }
+      return;
+    }
+
     // Plain text with line numbers
     fileViewerContent.className = 'plain-text';
     const lines = tab.content.split('\n');
@@ -1396,6 +1432,509 @@
       }
     }
   });
+
+  // --- Right Panel Tab Switching (Files / Git) ---
+
+  rightPanelTabs.addEventListener('click', (e) => {
+    const btn = e.target.closest('.rp-tab');
+    if (!btn) return;
+    const tab = btn.dataset.rpTab;
+    if (tab === activeRightPanelTab) return;
+    activeRightPanelTab = tab;
+    rightPanelTabs.querySelectorAll('.rp-tab').forEach(b => b.classList.toggle('active', b.dataset.rpTab === tab));
+    if (tab === 'files') {
+      fileTreeEl.classList.remove('hidden');
+      gitPanel.classList.add('hidden');
+      btnRefreshFileTree.style.display = '';
+      btnToggleFileTree.style.display = '';
+    } else {
+      fileTreeEl.classList.add('hidden');
+      gitPanel.classList.remove('hidden');
+      btnRefreshFileTree.style.display = 'none';
+      btnToggleFileTree.style.display = 'none';
+      refreshGitStatus();
+    }
+  });
+
+  // --- Git Panel ---
+
+  const STATUS_LABELS = { M: 'Modified', A: 'Added', D: 'Deleted', R: 'Renamed', C: 'Copied', U: 'Unmerged' };
+
+  async function refreshGitStatus() {
+    if (!activeSessionId) return;
+    gitFileList.innerHTML = '<div class="git-loading">Loading...</div>';
+    try {
+      const res = await fetch(`/api/sessions/${activeSessionId}/git/status`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        gitFileList.innerHTML = `<div class="git-loading">${err.error || 'Failed to load status'}</div>`;
+        return;
+      }
+      const data = await res.json();
+      renderGitStatus(data);
+      refreshGitLog();
+    } catch (e) {
+      gitFileList.innerHTML = '<div class="git-loading">Failed to load status</div>';
+    }
+  }
+
+  function renderGitStatus(data) {
+    gitBranchName.textContent = data.branch || 'unknown';
+    gitBranchName.title = data.branch || '';
+
+    const parts = [];
+    if (data.ahead > 0) parts.push(`+${data.ahead}`);
+    if (data.behind > 0) parts.push(`-${data.behind}`);
+    gitAheadBehind.textContent = parts.join(' ');
+
+    // Enable/disable commit button based on staged files
+    btnGitCommit.disabled = data.staged.length === 0;
+
+    gitFileList.innerHTML = '';
+
+    const hasChanges = data.staged.length > 0 || data.unstaged.length > 0 || data.untracked.length > 0;
+
+    if (!hasChanges) {
+      gitFileList.innerHTML = '<div class="git-empty">No changes</div>';
+      return;
+    }
+
+    // Staged section
+    if (data.staged.length > 0) {
+      const section = createGitSection('Staged Changes', data.staged.length, 'staged');
+      const stageAll = section.querySelector('.git-section-action');
+      stageAll.textContent = 'Unstage All';
+      stageAll.onclick = () => gitUnstageAll();
+      for (const f of data.staged) {
+        section.querySelector('.git-section-files').appendChild(
+          createGitFileRow(f.path, f.status, 'staged')
+        );
+      }
+      gitFileList.appendChild(section);
+    }
+
+    // Unstaged section
+    if (data.unstaged.length > 0) {
+      const section = createGitSection('Changes', data.unstaged.length, 'unstaged');
+      const stageAll = section.querySelector('.git-section-action');
+      stageAll.textContent = 'Stage All';
+      stageAll.onclick = () => gitStageAll();
+      for (const f of data.unstaged) {
+        section.querySelector('.git-section-files').appendChild(
+          createGitFileRow(f.path, f.status, 'unstaged')
+        );
+      }
+      gitFileList.appendChild(section);
+    }
+
+    // Untracked section
+    if (data.untracked.length > 0) {
+      const section = createGitSection('Untracked', data.untracked.length, 'untracked');
+      const stageAll = section.querySelector('.git-section-action');
+      stageAll.textContent = 'Stage All';
+      stageAll.onclick = () => gitStageFiles(data.untracked);
+      for (const f of data.untracked) {
+        section.querySelector('.git-section-files').appendChild(
+          createGitFileRow(f, '?', 'untracked')
+        );
+      }
+      gitFileList.appendChild(section);
+    }
+  }
+
+  function createGitSection(title, count, type) {
+    const section = document.createElement('div');
+    section.className = 'git-section';
+
+    const header = document.createElement('div');
+    header.className = 'git-section-header';
+
+    const label = document.createElement('span');
+    label.className = 'git-section-label';
+    label.textContent = `${title} (${count})`;
+
+    const action = document.createElement('button');
+    action.className = 'git-section-action';
+
+    header.appendChild(label);
+    header.appendChild(action);
+
+    const files = document.createElement('div');
+    files.className = 'git-section-files';
+
+    section.appendChild(header);
+    section.appendChild(files);
+    return section;
+  }
+
+  function createGitFileRow(filePath, status, type) {
+    const row = document.createElement('div');
+    row.className = 'git-file-row';
+
+    const statusBadge = document.createElement('span');
+    statusBadge.className = `git-status-badge git-status-${status.toLowerCase()}`;
+    statusBadge.textContent = status;
+    statusBadge.title = STATUS_LABELS[status] || status;
+
+    const name = document.createElement('span');
+    name.className = 'git-file-name';
+    name.textContent = filePath;
+    name.title = filePath;
+
+    const actions = document.createElement('div');
+    actions.className = 'git-file-actions';
+
+    if (type === 'staged') {
+      // View diff button
+      const diffBtn = document.createElement('button');
+      diffBtn.className = 'git-file-action';
+      diffBtn.textContent = 'Diff';
+      diffBtn.title = 'View staged diff';
+      diffBtn.onclick = (e) => { e.stopPropagation(); viewGitDiff(filePath, true); };
+      actions.appendChild(diffBtn);
+
+      // Unstage button
+      const unstageBtn = document.createElement('button');
+      unstageBtn.className = 'git-file-action';
+      unstageBtn.textContent = '\u2212'; // minus sign
+      unstageBtn.title = 'Unstage file';
+      unstageBtn.onclick = (e) => { e.stopPropagation(); gitUnstageFiles([filePath]); };
+      actions.appendChild(unstageBtn);
+    } else if (type === 'unstaged') {
+      // View diff button
+      const diffBtn = document.createElement('button');
+      diffBtn.className = 'git-file-action';
+      diffBtn.textContent = 'Diff';
+      diffBtn.title = 'View unstaged diff';
+      diffBtn.onclick = (e) => { e.stopPropagation(); viewGitDiff(filePath, false); };
+      actions.appendChild(diffBtn);
+
+      // Discard button
+      const discardBtn = document.createElement('button');
+      discardBtn.className = 'git-file-action git-action-danger';
+      discardBtn.textContent = '\u21A9'; // ↩
+      discardBtn.title = 'Discard changes';
+      discardBtn.onclick = (e) => {
+        e.stopPropagation();
+        showConfirmDialog('Discard Changes', `Discard changes to "${filePath}"?`, () => gitDiscardFiles([filePath]));
+      };
+      actions.appendChild(discardBtn);
+
+      // Stage button
+      const stageBtn = document.createElement('button');
+      stageBtn.className = 'git-file-action';
+      stageBtn.textContent = '+';
+      stageBtn.title = 'Stage file';
+      stageBtn.onclick = (e) => { e.stopPropagation(); gitStageFiles([filePath]); };
+      actions.appendChild(stageBtn);
+    } else if (type === 'untracked') {
+      // Stage button
+      const stageBtn = document.createElement('button');
+      stageBtn.className = 'git-file-action';
+      stageBtn.textContent = '+';
+      stageBtn.title = 'Stage file';
+      stageBtn.onclick = (e) => { e.stopPropagation(); gitStageFiles([filePath]); };
+      actions.appendChild(stageBtn);
+    }
+
+    row.appendChild(statusBadge);
+    row.appendChild(name);
+    row.appendChild(actions);
+
+    // Click row to view diff (for tracked files)
+    if (type !== 'untracked') {
+      row.style.cursor = 'pointer';
+      row.onclick = () => viewGitDiff(filePath, type === 'staged');
+    }
+
+    return row;
+  }
+
+  // --- Git Actions ---
+
+  async function gitStageFiles(paths) {
+    if (!activeSessionId) return;
+    try {
+      const res = await fetch(`/api/sessions/${activeSessionId}/git/stage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to stage files', 'error');
+        return;
+      }
+      refreshGitStatus();
+    } catch {
+      showToast('Failed to stage files', 'error');
+    }
+  }
+
+  async function gitStageAll() {
+    if (!activeSessionId) return;
+    try {
+      const res = await fetch(`/api/sessions/${activeSessionId}/git/stage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all: true }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to stage all', 'error');
+        return;
+      }
+      refreshGitStatus();
+    } catch {
+      showToast('Failed to stage all', 'error');
+    }
+  }
+
+  async function gitUnstageFiles(paths) {
+    if (!activeSessionId) return;
+    try {
+      const res = await fetch(`/api/sessions/${activeSessionId}/git/unstage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to unstage files', 'error');
+        return;
+      }
+      refreshGitStatus();
+    } catch {
+      showToast('Failed to unstage files', 'error');
+    }
+  }
+
+  async function gitUnstageAll() {
+    if (!activeSessionId) return;
+    try {
+      const res = await fetch(`/api/sessions/${activeSessionId}/git/unstage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ all: true }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to unstage all', 'error');
+        return;
+      }
+      refreshGitStatus();
+    } catch {
+      showToast('Failed to unstage all', 'error');
+    }
+  }
+
+  async function gitDiscardFiles(paths) {
+    if (!activeSessionId) return;
+    try {
+      const res = await fetch(`/api/sessions/${activeSessionId}/git/discard`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ paths }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to discard changes', 'error');
+        return;
+      }
+      refreshGitStatus();
+    } catch {
+      showToast('Failed to discard changes', 'error');
+    }
+  }
+
+  async function gitCommit() {
+    if (!activeSessionId) return;
+    const message = gitCommitMessage.value.trim();
+    if (!message) return;
+
+    btnGitCommit.disabled = true;
+    try {
+      const res = await fetch(`/api/sessions/${activeSessionId}/git/commit`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message }),
+      });
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Commit failed', 'error');
+        btnGitCommit.disabled = false;
+        return;
+      }
+      const data = await res.json();
+      gitCommitMessage.value = '';
+      showToast(`Committed: ${data.commit.shortHash} ${data.commit.message}`, 'success');
+      refreshGitStatus();
+    } catch {
+      showToast('Commit failed', 'error');
+      btnGitCommit.disabled = false;
+    }
+  }
+
+  btnGitCommit.onclick = gitCommit;
+
+  gitCommitMessage.onkeydown = (e) => {
+    if (e.key === 'Enter' && !btnGitCommit.disabled) {
+      e.preventDefault();
+      gitCommit();
+    }
+  };
+
+  gitCommitMessage.oninput = () => {
+    // Re-enable commit button if there's text (actual staged check happens on commit)
+    // Keeps button responsive while typing
+  };
+
+  btnGitRefresh.onclick = refreshGitStatus;
+
+  // --- Merge to Main ---
+
+  btnGitMerge.onclick = () => {
+    const branch = gitBranchName.textContent || 'this branch';
+    showConfirmDialog(
+      'Merge to Main',
+      `Merge "${branch}" into the default branch (main/master)? All committed changes will be applied.`,
+      gitMergeToMain
+    );
+  };
+
+  async function gitMergeToMain() {
+    if (!activeSessionId) return;
+
+    btnGitMerge.disabled = true;
+    btnGitMerge.textContent = 'Merging...';
+
+    try {
+      const res = await fetch(`/api/sessions/${activeSessionId}/git/merge-to-main`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (data.code === 'MERGE_CONFLICT') {
+          showToast('Merge conflict! Resolve manually in the shell terminal.', 'warning', 6000);
+        } else if (data.code === 'DIRTY_WORKTREE') {
+          showToast('Commit or discard changes before merging.', 'warning');
+        } else {
+          showToast(data.error || 'Merge failed', 'error');
+        }
+        return;
+      }
+
+      showToast(
+        `Merged ${data.mergedBranch} into ${data.targetBranch} (${data.commit.shortHash})`,
+        'success',
+        6000
+      );
+      refreshGitStatus();
+    } catch {
+      showToast('Merge failed', 'error');
+    } finally {
+      btnGitMerge.disabled = false;
+      btnGitMerge.textContent = 'Merge to Main';
+    }
+  }
+
+  // --- Git Diff Viewer ---
+
+  async function viewGitDiff(filePath, staged) {
+    if (!activeSessionId) return;
+
+    const params = new URLSearchParams({ path: filePath });
+    if (staged) params.set('staged', 'true');
+
+    try {
+      const res = await fetch(`/api/sessions/${activeSessionId}/git/diff?${params}`);
+      if (!res.ok) {
+        showToast('Failed to load diff', 'error');
+        return;
+      }
+      const data = await res.json();
+      if (!data.diff.trim()) {
+        showToast('No diff available', 'info');
+        return;
+      }
+      openDiffTab(filePath, data.diff, staged);
+    } catch {
+      showToast('Failed to load diff', 'error');
+    }
+  }
+
+  function openDiffTab(filePath, diff, staged) {
+    const tabId = `diff:${staged ? 'staged' : 'unstaged'}:${filePath}`;
+    const filename = filePath.split('/').pop();
+    const tabTitle = `${filename} (${staged ? 'staged' : 'diff'})`;
+
+    // Remove existing diff tab for the same file/mode
+    openTabs = openTabs.filter(t => t.id !== tabId);
+
+    const tab = {
+      id: tabId,
+      filename: tabTitle,
+      fullPath: filePath,
+      content: diff,
+      type: 'diff',
+    };
+    openTabs.push(tab);
+    switchTab(tab.id);
+  }
+
+  // --- Git Log ---
+
+  async function refreshGitLog() {
+    if (!activeSessionId) return;
+    try {
+      const res = await fetch(`/api/sessions/${activeSessionId}/git/log?limit=30`);
+      if (!res.ok) return;
+      const data = await res.json();
+      renderGitLog(data.commits);
+    } catch {
+      // Silently fail
+    }
+  }
+
+  function renderGitLog(commits) {
+    gitLogList.innerHTML = '';
+    if (!commits || commits.length === 0) {
+      gitLogList.innerHTML = '<div class="git-empty">No commits</div>';
+      return;
+    }
+    for (const c of commits) {
+      const row = document.createElement('div');
+      row.className = 'git-log-row';
+
+      const hash = document.createElement('span');
+      hash.className = 'git-log-hash';
+      hash.textContent = c.shortHash;
+
+      const msg = document.createElement('span');
+      msg.className = 'git-log-msg';
+      msg.textContent = c.message;
+      msg.title = c.message;
+
+      const date = document.createElement('span');
+      date.className = 'git-log-date';
+      date.textContent = relativeTime(c.date);
+
+      row.appendChild(hash);
+      row.appendChild(msg);
+      row.appendChild(date);
+      gitLogList.appendChild(row);
+    }
+  }
+
+  btnGitLogToggle.onclick = () => {
+    gitLogExpanded = !gitLogExpanded;
+    const logSection = document.getElementById('git-log-section');
+    logSection.classList.toggle('collapsed', !gitLogExpanded);
+    btnGitLogToggle.innerHTML = gitLogExpanded ? '&#x25BC;' : '&#x25B6;';
+  };
 
   // --- Right Panel Divider Drag ---
 
