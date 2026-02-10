@@ -934,6 +934,13 @@ export function createServer({ testMode = false } = {}) {
     }
 
     manager.onExit(session.id, () => {
+      // Inject terminal cleanup: exit alternate screen + show cursor.
+      // This ensures TUI apps (Codex, Claude) leave a clean terminal state
+      // for both attached clients and future buffer replays.
+      manager.injectToBuffer(session.id,
+        '\x1b[?1049l'  // exit alternate screen (restore normal screen)
+        + '\x1b[?25h'  // show cursor
+      );
       store.updateSession(session.id, { status: 'exited' });
       broadcastState();
       const msg = JSON.stringify({ type: 'exited', sessionId: session.id });
@@ -1445,6 +1452,8 @@ export function createServer({ testMode = false } = {}) {
     let dataListener = null;
     let shellDataListener = null;
     let attachedShellSessionId = null;
+    // Track pending SIGWINCH nudge timer so resize messages can cancel it
+    let nudgeTimer = null;
 
     ws.on('message', async (raw) => {
       let msg;
@@ -1511,13 +1520,16 @@ export function createServer({ testMode = false } = {}) {
           // Send replay-done AFTER all data (buffer + pending) is sent
           safeSend(ws, JSON.stringify({ type: 'replay-done', sessionId }));
 
-          // Nudge Claude CLI to re-render by triggering a SIGWINCH via
-          // a tiny resize bounce. Ink (Claude's TUI) listens for this and
-          // repaints, restoring correct cursor position and visibility.
+          // Nudge the TUI CLI to re-render by triggering a SIGWINCH via
+          // a tiny resize bounce. Both Ink (Claude) and Codex listen for
+          // SIGWINCH and repaint, restoring correct cursor/visibility.
+          // Track the restore timer so a client resize cancels it.
           if (cols && rows && manager.isAlive(sessionId)) {
+            if (nudgeTimer) clearTimeout(nudgeTimer);
             const nudgeCols = Math.max(cols - 1, 1);
             manager.resize(sessionId, nudgeCols, rows);
-            setTimeout(() => {
+            nudgeTimer = setTimeout(() => {
+              nudgeTimer = null;
               manager.resize(sessionId, cols, rows);
             }, 50);
           }
@@ -1533,6 +1545,12 @@ export function createServer({ testMode = false } = {}) {
 
         case 'resize': {
           if (attachedSessionId && msg.cols && msg.rows) {
+            // Cancel any pending SIGWINCH nudge restore — the client is
+            // sending authoritative dimensions that supersede the nudge.
+            if (nudgeTimer) {
+              clearTimeout(nudgeTimer);
+              nudgeTimer = null;
+            }
             manager.resize(attachedSessionId, msg.cols, msg.rows);
           }
           break;

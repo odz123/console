@@ -1424,8 +1424,10 @@
       termWrapper.style.inset = '32px 0 0 0';
       fileViewer.classList.add('hidden');
       term.focus();
-      // Refit terminal since we changed inset
-      requestAnimationFrame(() => { if (fitAddon) fitAddon.fit(); });
+      // Refit terminal synchronously so term.cols/rows are correct before
+      // attachSession() sends the attach message with dimensions.
+      // Reading clientWidth/clientHeight forces a reflow after the inset change.
+      if (fitAddon) fitAddon.fit();
     } else {
       // Show file viewer, hide terminal
       termWrapper.style.display = 'none';
