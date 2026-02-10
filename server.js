@@ -35,14 +35,125 @@ const MAX_CWD_LENGTH = 1024;
 export function createServer({ testMode = false } = {}) {
   const app = express();
   const server = http.createServer(app);
-  const wss = new WebSocketServer({ server, path: '/ws' });
+  const wss = new WebSocketServer({ server, path: '/ws', maxPayload: 64 * 1024 });
   const manager = new PtyManager();
 
   // In test mode, use bash instead of claude; in-memory SQLite
   const store = testMode ? createStore(':memory:') : createStore();
   const clients = new Set();
+  const startTime = Date.now();
+
+  // --- Security Headers ---
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '0');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    res.setHeader(
+      'Content-Security-Policy',
+      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; img-src 'self' data:; font-src 'self'"
+    );
+    next();
+  });
+
+  // --- Request Logging ---
+  app.use((req, res, next) => {
+    const start = Date.now();
+    res.on('finish', () => {
+      const duration = Date.now() - start;
+      const level = res.statusCode >= 500 ? 'error' : res.statusCode >= 400 ? 'warn' : 'info';
+      console.log(JSON.stringify({
+        level,
+        method: req.method,
+        url: req.originalUrl,
+        status: res.statusCode,
+        duration_ms: duration,
+        timestamp: new Date().toISOString(),
+      }));
+    });
+    next();
+  });
+
+  // --- Rate Limiting ---
+  const rateLimitMap = new Map();
+  const RATE_LIMIT_WINDOW_MS = 60_000;
+  const RATE_LIMIT_MAX = testMode ? 10000 : 100;
+  const RATE_LIMIT_CLEANUP_INTERVAL = 5 * 60_000;
+
+  function rateLimit(req, res, next) {
+    const key = req.ip || '127.0.0.1';
+    const now = Date.now();
+    let entry = rateLimitMap.get(key);
+
+    if (!entry || now - entry.windowStart > RATE_LIMIT_WINDOW_MS) {
+      entry = { windowStart: now, count: 0 };
+      rateLimitMap.set(key, entry);
+    }
+
+    entry.count++;
+
+    if (entry.count > RATE_LIMIT_MAX) {
+      res.setHeader('Retry-After', Math.ceil((entry.windowStart + RATE_LIMIT_WINDOW_MS - now) / 1000));
+      return res.status(429).json({ error: 'Too many requests' });
+    }
+
+    next();
+  }
+
+  // Periodically clean up stale rate limit entries
+  const rateLimitCleanupTimer = setInterval(() => {
+    const now = Date.now();
+    for (const [key, entry] of rateLimitMap) {
+      if (now - entry.windowStart > RATE_LIMIT_WINDOW_MS * 2) {
+        rateLimitMap.delete(key);
+      }
+    }
+  }, RATE_LIMIT_CLEANUP_INTERVAL);
+  rateLimitCleanupTimer.unref();
+
+  // Apply rate limiting to mutation endpoints
+  app.use('/api', (req, res, next) => {
+    if (req.method === 'POST' || req.method === 'PATCH' || req.method === 'DELETE') {
+      return rateLimit(req, res, next);
+    }
+    next();
+  });
 
   app.use(express.json({ limit: '16kb' }));
+
+  // --- Request Timeout ---
+  app.use((req, res, next) => {
+    const timeout = req.path.includes('/git/') ? 30_000 : 15_000;
+    req.setTimeout(timeout);
+    res.setTimeout(timeout, () => {
+      if (!res.headersSent) {
+        res.status(408).json({ error: 'Request timeout' });
+      }
+    });
+    next();
+  });
+
+  // --- Health Check ---
+  app.get('/health', (req, res) => {
+    const memUsage = process.memoryUsage();
+    res.json({
+      status: 'ok',
+      uptime_s: Math.floor((Date.now() - startTime) / 1000),
+      pid: process.pid,
+      memory: {
+        rss_mb: Math.round(memUsage.rss / 1024 / 1024),
+        heap_used_mb: Math.round(memUsage.heapUsed / 1024 / 1024),
+        heap_total_mb: Math.round(memUsage.heapTotal / 1024 / 1024),
+      },
+      sessions: {
+        total: store.getAll().sessions.length,
+        alive: manager.getAll().length,
+      },
+      websocket_clients: clients.size,
+    });
+  });
+
   app.use(express.static(path.join(__dirname, 'public')));
 
   // --- Session-scoped file browser (for file tree) ---
@@ -1169,6 +1280,14 @@ export function createServer({ testMode = false } = {}) {
         return;
       }
 
+      // Validate message structure
+      if (!msg || typeof msg !== 'object' || typeof msg.type !== 'string') return;
+
+      // Validate common fields when present
+      if (msg.sessionId !== undefined && typeof msg.sessionId !== 'string') return;
+      if (msg.cols !== undefined && (!Number.isInteger(msg.cols) || msg.cols < 1 || msg.cols > 500)) return;
+      if (msg.rows !== undefined && (!Number.isInteger(msg.rows) || msg.rows < 1 || msg.rows > 200)) return;
+
       switch (msg.type) {
         case 'attach': {
           const { sessionId, cols, rows } = msg;
@@ -1337,6 +1456,23 @@ export function createServer({ testMode = false } = {}) {
     });
   });
 
+  // --- Global Error Handler ---
+  // Must be registered after all routes (Express identifies error handlers by 4 args)
+  app.use((err, req, res, _next) => {
+    console.error(JSON.stringify({
+      level: 'error',
+      type: 'unhandled_route_error',
+      method: req.method,
+      url: req.originalUrl,
+      error: err.message,
+      stack: testMode ? undefined : err.stack,
+      timestamp: new Date().toISOString(),
+    }));
+    if (!res.headersSent) {
+      res.status(500).json({ error: 'Internal server error' });
+    }
+  });
+
   // --- Startup: recover missing Claude session IDs, then resume ---
 
   if (!testMode) {
@@ -1469,6 +1605,8 @@ export function createServer({ testMode = false } = {}) {
   server.destroy = () => {
     return new Promise((resolve) => {
       if (cleanupTimer) clearInterval(cleanupTimer);
+      clearInterval(rateLimitCleanupTimer);
+      rateLimitMap.clear();
       manager.destroyAll();
       manager.destroyAllShells();
       store.close();
@@ -1488,8 +1626,56 @@ export function createServer({ testMode = false } = {}) {
 
 // Run if executed directly (ESM-safe check)
 if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) {
-  const port = process.env.PORT || 3000;
+  const port = parseInt(process.env.PORT || '3000', 10);
+  if (isNaN(port) || port < 1 || port > 65535) {
+    console.error(`Invalid PORT: ${process.env.PORT}. Must be 1-65535.`);
+    process.exit(1);
+  }
+
   const server = createServer();
+
+  // --- Process-level Error Handlers ---
+  process.on('uncaughtException', (err) => {
+    console.error(JSON.stringify({
+      level: 'fatal',
+      type: 'uncaught_exception',
+      error: err.message,
+      stack: err.stack,
+      timestamp: new Date().toISOString(),
+    }));
+    server.destroy().then(() => process.exit(1));
+  });
+
+  process.on('unhandledRejection', (reason) => {
+    console.error(JSON.stringify({
+      level: 'error',
+      type: 'unhandled_rejection',
+      error: reason instanceof Error ? reason.message : String(reason),
+      stack: reason instanceof Error ? reason.stack : undefined,
+      timestamp: new Date().toISOString(),
+    }));
+  });
+
+  // --- Graceful Shutdown ---
+  let isShuttingDown = false;
+
+  async function gracefulShutdown(signal) {
+    if (isShuttingDown) return;
+    isShuttingDown = true;
+    console.log(`${signal} received, starting graceful shutdown...`);
+    try {
+      await server.destroy();
+      console.log('Graceful shutdown complete.');
+      process.exit(0);
+    } catch (err) {
+      console.error(`Error during shutdown: ${err.message}`);
+      process.exit(1);
+    }
+  }
+
+  process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+  process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
   server.listen(port, '127.0.0.1', () => {
     console.log(`Claude Console running at http://127.0.0.1:${port}`);
   });
