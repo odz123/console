@@ -181,9 +181,16 @@ body {
 }
 .btn-new-session:hover { color: #e94560; }
 
-.inline-session-input {
-  width: calc(100% - 30px);
+.inline-session-form {
+  display: flex;
+  gap: 4px;
   margin: 4px 0 8px 30px;
+  width: calc(100% - 30px);
+}
+
+.inline-session-input {
+  flex: 1;
+  min-width: 0;
   padding: 4px 8px;
   background: #1a1a2e;
   border: 1px solid #0f3460;
@@ -193,6 +200,19 @@ body {
   outline: none;
 }
 .inline-session-input:focus { border-color: #e94560; }
+
+.inline-provider-select {
+  padding: 4px 4px;
+  background: #1a1a2e;
+  border: 1px solid #0f3460;
+  border-radius: 4px;
+  color: #e0e0e0;
+  font-size: 11px;
+  outline: none;
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.inline-provider-select:focus { border-color: #e94560; }
 
 .inline-error {
   padding: 4px 16px 4px 30px;
@@ -559,6 +579,20 @@ body {
   display: flex;
   flex-direction: column;
   gap: 2px;
+}
+
+.provider-badge {
+  font-size: 9px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  padding: 1px 4px;
+  border-radius: 3px;
+  max-width: fit-content;
+}
+.provider-badge.provider-codex {
+  color: #4ade80;
+  background: rgba(74, 222, 128, 0.15);
 }
 
 .branch-badge {

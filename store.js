@@ -24,6 +24,7 @@ function rowToSession(row) {
     branchName: row.branch_name,
     worktreePath: row.worktree_path,
     claudeSessionId: row.claude_session_id,
+    provider: row.provider || 'claude',
     status: row.status,
     createdAt: row.created_at,
   };
@@ -46,7 +47,7 @@ export function createStore(dbPath) {
   db.pragma('busy_timeout = 5000');
 
   // --- Schema versioning & migrations ---
-  const CURRENT_SCHEMA_VERSION = 1;
+  const CURRENT_SCHEMA_VERSION = 2;
 
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
   const versionRow = db.prepare('SELECT version FROM schema_version').get();
@@ -78,8 +79,11 @@ export function createStore(dbPath) {
     dbVersion = 1;
   }
 
-  // Future migrations go here:
-  // if (dbVersion < 2) { ... dbVersion = 2; }
+  // Migration 1 -> 2: add provider column to sessions
+  if (dbVersion < 2) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN provider TEXT NOT NULL DEFAULT 'claude'`);
+    dbVersion = 2;
+  }
 
   // Upsert schema version
   if (!versionRow) {
@@ -99,7 +103,7 @@ export function createStore(dbPath) {
     getAllSessions: db.prepare('SELECT * FROM sessions ORDER BY created_at ASC'),
     getSession: db.prepare('SELECT * FROM sessions WHERE id = ?'),
     insertSession: db.prepare(
-      'INSERT INTO sessions (id, project_id, name, branch_name, worktree_path, claude_session_id, status, created_at) VALUES (@id, @projectId, @name, @branchName, @worktreePath, @claudeSessionId, @status, @createdAt)'
+      'INSERT INTO sessions (id, project_id, name, branch_name, worktree_path, claude_session_id, provider, status, created_at) VALUES (@id, @projectId, @name, @branchName, @worktreePath, @claudeSessionId, @provider, @status, @createdAt)'
     ),
     updateSession: db.prepare('UPDATE sessions SET status = @status, claude_session_id = @claudeSessionId WHERE id = @id'),
     renameSession: db.prepare('UPDATE sessions SET name = @name WHERE id = @id'),
@@ -138,7 +142,7 @@ export function createStore(dbPath) {
       return row ? rowToSession(row) : undefined;
     },
 
-    createSession({ id, projectId, name, branchName, worktreePath, claudeSessionId, status, createdAt }) {
+    createSession({ id, projectId, name, branchName, worktreePath, claudeSessionId, provider, status, createdAt }) {
       stmts.insertSession.run({
         id,
         projectId,
@@ -146,6 +150,7 @@ export function createStore(dbPath) {
         branchName: branchName ?? null,
         worktreePath: worktreePath ?? null,
         claudeSessionId: claudeSessionId ?? null,
+        provider: provider ?? 'claude',
         status: status ?? 'running',
         createdAt,
       });

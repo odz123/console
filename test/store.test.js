@@ -210,6 +210,27 @@ describe('Store: session CRUD', () => {
     assert.strictEqual(session.worktreePath, null);
     assert.strictEqual(session.claudeSessionId, null);
     assert.strictEqual(session.status, 'running');
+    assert.strictEqual(session.provider, 'claude');
+  });
+
+  it('createSession with codex provider', () => {
+    const store = storeWithProject();
+    const session = store.createSession({
+      id: 's1', projectId: 'p1', name: 'codex-session',
+      provider: 'codex',
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.strictEqual(session.provider, 'codex');
+    assert.strictEqual(session.name, 'codex-session');
+  });
+
+  it('createSession defaults provider to claude', () => {
+    const store = storeWithProject();
+    const session = store.createSession({
+      id: 's1', projectId: 'p1', name: 'default-provider',
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.strictEqual(session.provider, 'claude');
   });
 });
 
