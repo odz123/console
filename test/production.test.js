@@ -1,9 +1,9 @@
-// test/production.test.js — Tests for production hardening features
+// test/production.test.js — Tests for production hardening features (HTTP)
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert';
 import { createServer } from '../server.js';
 
-describe('Health Check', () => {
+describe('Production Features', () => {
   let server;
   let baseUrl;
 
@@ -32,21 +32,6 @@ describe('Health Check', () => {
     assert.strictEqual(typeof data.sessions.alive, 'number');
     assert.strictEqual(typeof data.websocket_clients, 'number');
   });
-});
-
-describe('Security Headers', () => {
-  let server;
-  let baseUrl;
-
-  before(async () => {
-    server = createServer({ testMode: true });
-    await new Promise((resolve) => server.listen(0, resolve));
-    baseUrl = `http://localhost:${server.address().port}`;
-  });
-
-  after(async () => {
-    await server.destroy();
-  });
 
   it('responses include security headers', async () => {
     const res = await fetch(`${baseUrl}/health`);
@@ -71,25 +56,25 @@ describe('Security Headers', () => {
     assert.strictEqual(res.headers.get('x-content-type-options'), 'nosniff');
     assert.strictEqual(res.headers.get('x-frame-options'), 'DENY');
   });
-});
 
-describe('Rate Limiting', () => {
-  let server;
-  let baseUrl;
-
-  before(async () => {
-    // Use a dedicated server with a low rate limit for testing
-    server = createServer({ testMode: true });
-    await new Promise((resolve) => server.listen(0, resolve));
-    baseUrl = `http://localhost:${server.address().port}`;
+  it('responses include X-Request-ID header (UUID format)', async () => {
+    const res = await fetch(`${baseUrl}/api/projects`);
+    const requestId = res.headers.get('x-request-id');
+    assert.ok(requestId, 'X-Request-ID header should be present');
+    assert.match(requestId, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
   });
 
-  after(async () => {
-    await server.destroy();
+  it('each request gets a unique request ID', async () => {
+    const res1 = await fetch(`${baseUrl}/api/projects`);
+    const res2 = await fetch(`${baseUrl}/api/projects`);
+    assert.notStrictEqual(
+      res1.headers.get('x-request-id'),
+      res2.headers.get('x-request-id'),
+      'request IDs should be unique'
+    );
   });
 
   it('does not rate limit GET requests', async () => {
-    // GET requests should not be rate limited
     for (let i = 0; i < 5; i++) {
       const res = await fetch(`${baseUrl}/api/projects`);
       assert.strictEqual(res.status, 200);
@@ -97,34 +82,12 @@ describe('Rate Limiting', () => {
   });
 
   it('allows normal POST request volume', async () => {
-    // In test mode, rate limit is very high (10000), so normal usage should work
     const res = await fetch(`${baseUrl}/api/projects`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ name: 'rate-limit-test', cwd: process.cwd() }),
     });
     assert.ok(res.status < 429, `expected non-429 status, got ${res.status}`);
-  });
-});
-
-describe('Global Error Handler', () => {
-  let server;
-  let baseUrl;
-
-  before(async () => {
-    server = createServer({ testMode: true });
-    await new Promise((resolve) => server.listen(0, resolve));
-    baseUrl = `http://localhost:${server.address().port}`;
-  });
-
-  after(async () => {
-    await server.destroy();
-  });
-
-  it('returns 404 for unknown API routes', async () => {
-    const res = await fetch(`${baseUrl}/api/nonexistent`);
-    // Express returns 404 for unmatched routes
-    assert.ok(res.status === 404 || res.status === 501);
   });
 
   it('returns proper error for malformed JSON', async () => {
@@ -135,113 +98,18 @@ describe('Global Error Handler', () => {
     });
     assert.ok(res.status >= 400);
   });
-});
-
-describe('Request Timeout', () => {
-  let server;
-  let baseUrl;
-
-  before(async () => {
-    server = createServer({ testMode: true });
-    await new Promise((resolve) => server.listen(0, resolve));
-    baseUrl = `http://localhost:${server.address().port}`;
-  });
-
-  after(async () => {
-    await server.destroy();
-  });
 
   it('normal requests complete without timeout', async () => {
     const res = await fetch(`${baseUrl}/api/projects`);
     assert.strictEqual(res.status, 200);
   });
-});
 
-describe('WebSocket Hardening', () => {
-  let server;
-  let wsUrl;
-
-  before(async () => {
-    server = createServer({ testMode: true });
-    await new Promise((resolve) => server.listen(0, resolve));
-    const port = server.address().port;
-    wsUrl = `ws://localhost:${port}/ws`;
-  });
-
-  after(async () => {
-    await server.destroy();
-  });
-
-  it('rejects messages with invalid cols/rows types', async () => {
-    const { WebSocket } = await import('ws');
-    const ws = new WebSocket(wsUrl);
-
-    await new Promise((resolve) => ws.once('open', resolve));
-
-    // Skip initial state message
-    await new Promise((resolve) => ws.once('message', resolve));
-
-    // Send attach with invalid cols (should be silently ignored)
-    ws.send(JSON.stringify({
-      type: 'attach',
-      sessionId: 'nonexistent',
-      cols: 'invalid',
-      rows: 24,
-    }));
-
-    // The server should not crash - wait a bit and verify connection is alive
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.strictEqual(ws.readyState, WebSocket.OPEN);
-
-    ws.terminate();
-  });
-
-  it('rejects messages with negative cols/rows', async () => {
-    const { WebSocket } = await import('ws');
-    const ws = new WebSocket(wsUrl);
-
-    await new Promise((resolve) => ws.once('open', resolve));
-    await new Promise((resolve) => ws.once('message', resolve));
-
-    ws.send(JSON.stringify({
-      type: 'resize',
-      cols: -1,
-      rows: -1,
-    }));
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.strictEqual(ws.readyState, WebSocket.OPEN);
-
-    ws.terminate();
-  });
-
-  it('rejects messages without type field', async () => {
-    const { WebSocket } = await import('ws');
-    const ws = new WebSocket(wsUrl);
-
-    await new Promise((resolve) => ws.once('open', resolve));
-    await new Promise((resolve) => ws.once('message', resolve));
-
-    ws.send(JSON.stringify({ data: 'no type field' }));
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.strictEqual(ws.readyState, WebSocket.OPEN);
-
-    ws.terminate();
-  });
-
-  it('rejects non-JSON messages', async () => {
-    const { WebSocket } = await import('ws');
-    const ws = new WebSocket(wsUrl);
-
-    await new Promise((resolve) => ws.once('open', resolve));
-    await new Promise((resolve) => ws.once('message', resolve));
-
-    ws.send('not json at all');
-
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    assert.strictEqual(ws.readyState, WebSocket.OPEN);
-
-    ws.terminate();
+  it('rejects session creation for non-existent project', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/nonexistent/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'test' }),
+    });
+    assert.strictEqual(res.status, 404);
   });
 });
