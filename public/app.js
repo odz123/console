@@ -1476,6 +1476,60 @@
     document.body.style.userSelect = 'none';
   });
 
+  // --- Mobile drawer toggles ---
+
+  const mobileOverlay = document.getElementById('mobile-overlay');
+  const btnMobileSidebar = document.getElementById('btn-mobile-sidebar');
+  const btnMobilePanel = document.getElementById('btn-mobile-panel');
+
+  function isMobile() {
+    return window.matchMedia('(max-width: 768px)').matches;
+  }
+
+  function closeMobileDrawers() {
+    sidebar.classList.remove('mobile-open');
+    rightPanel.classList.remove('mobile-open');
+    mobileOverlay.classList.remove('visible');
+    mobileOverlay.classList.add('hidden');
+  }
+
+  btnMobileSidebar.onclick = () => {
+    const isOpen = sidebar.classList.contains('mobile-open');
+    closeMobileDrawers();
+    if (!isOpen) {
+      sidebar.classList.add('mobile-open');
+      mobileOverlay.classList.remove('hidden');
+      mobileOverlay.classList.add('visible');
+    }
+  };
+
+  btnMobilePanel.onclick = () => {
+    const isOpen = rightPanel.classList.contains('mobile-open');
+    closeMobileDrawers();
+    if (!isOpen) {
+      rightPanel.classList.add('mobile-open');
+      mobileOverlay.classList.remove('hidden');
+      mobileOverlay.classList.add('visible');
+    }
+  };
+
+  mobileOverlay.onclick = closeMobileDrawers;
+
+  // Close drawers on session click (mobile)
+  const origAttachSession = attachSession;
+  attachSession = function (sessionId) {
+    if (isMobile()) closeMobileDrawers();
+    origAttachSession(sessionId);
+  };
+
+  // Refit terminals on orientation change
+  window.addEventListener('orientationchange', () => {
+    setTimeout(() => {
+      if (fitAddon) fitAddon.fit();
+      if (shellFitAddon) shellFitAddon.fit();
+    }, 200);
+  });
+
   // --- Init ---
   initTerminal();
   initShellTerminal();

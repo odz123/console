@@ -919,3 +919,212 @@ body {
   color: #6b7280;
   font-size: 14px;
 }
+
+/* --- Mobile header (hidden on desktop) --- */
+
+#mobile-header {
+  display: none;
+}
+
+#mobile-overlay {
+  display: none;
+}
+
+/* --- Mobile responsive layout --- */
+
+@media (max-width: 768px) {
+  body {
+    height: 100dvh;
+  }
+
+  #mobile-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 8px 12px;
+    background: #16213e;
+    border-bottom: 1px solid #0f3460;
+    flex-shrink: 0;
+    z-index: 50;
+    height: 44px;
+  }
+
+  #btn-mobile-sidebar,
+  #btn-mobile-panel {
+    background: none;
+    border: none;
+    color: #e0e0e0;
+    font-size: 20px;
+    cursor: pointer;
+    padding: 4px 8px;
+    border-radius: 4px;
+    min-width: 36px;
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+  }
+
+  #btn-mobile-sidebar:hover,
+  #btn-mobile-panel:hover {
+    background: #0f3460;
+  }
+
+  #mobile-title {
+    font-size: 14px;
+    font-weight: 600;
+    color: #e0e0e0;
+  }
+
+  #mobile-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 59;
+  }
+  #mobile-overlay.hidden {
+    display: none;
+  }
+  #mobile-overlay.visible {
+    display: block;
+  }
+
+  #app {
+    height: calc(100dvh - 44px);
+  }
+
+  /* Sidebar: off-screen drawer from left */
+  #sidebar {
+    position: fixed;
+    top: 44px;
+    left: 0;
+    bottom: 0;
+    width: 280px !important;
+    min-width: 280px !important;
+    z-index: 60;
+    transform: translateX(-100%);
+    transition: transform 0.25s ease;
+  }
+  #sidebar.mobile-open {
+    transform: translateX(0);
+  }
+
+  #sidebar-divider {
+    display: none;
+  }
+
+  /* Right panel: off-screen drawer from right */
+  #right-panel {
+    position: fixed;
+    top: 44px;
+    right: 0;
+    bottom: 0;
+    width: 320px !important;
+    min-width: 280px !important;
+    max-width: 85vw;
+    z-index: 60;
+    transform: translateX(100%);
+    transition: transform 0.25s ease;
+  }
+  #right-panel.mobile-open {
+    transform: translateX(0);
+  }
+  /* Override hidden state on mobile when actively open */
+  #right-panel.hidden {
+    display: flex;
+  }
+  #right-panel.hidden:not(.mobile-open) {
+    transform: translateX(100%);
+  }
+
+  /* Terminal takes full width */
+  #terminal-container {
+    min-width: 0;
+  }
+
+  /* Session actions always visible on mobile (no hover) */
+  .session-actions {
+    display: flex;
+  }
+
+  /* Larger touch targets for session list */
+  .project-sessions li {
+    padding: 10px 16px 10px 30px;
+    min-height: 44px;
+  }
+
+  .project-header {
+    padding: 12px;
+    min-height: 44px;
+  }
+
+  /* File tree items: larger touch targets */
+  .file-tree-item {
+    padding: 6px 8px;
+    min-height: 36px;
+  }
+
+  /* Modal: full width on mobile */
+  #modal {
+    width: calc(100vw - 32px);
+    max-width: 480px;
+    margin: 16px;
+  }
+
+  /* Tab bar: scrollable */
+  #tab-bar {
+    height: 36px;
+  }
+
+  .tab {
+    padding: 6px 12px;
+    font-size: 13px;
+  }
+
+  /* Toast: full width on mobile */
+  .toast {
+    left: 16px;
+    right: 16px;
+    max-width: none;
+  }
+
+  /* Confirmation dialog: wider on mobile */
+  .confirm-dialog {
+    width: calc(100vw - 32px);
+    max-width: 340px;
+  }
+
+  /* Project delete button always visible on mobile */
+  .project-delete {
+    display: block;
+  }
+
+  /* Right panel path: smaller on mobile */
+  .right-panel-header {
+    padding: 8px 10px;
+  }
+
+  /* Buttons: larger touch targets */
+  .panel-toggle {
+    padding: 4px 8px;
+    font-size: 14px;
+    min-width: 32px;
+    min-height: 32px;
+  }
+
+  .btn-new-session {
+    padding: 10px 16px 10px 30px;
+    min-height: 44px;
+  }
+
+  /* File viewer toolbar: compact */
+  #file-viewer-toolbar {
+    padding: 6px 10px;
+  }
+
+  /* Home add button */
+  .home-add-btn {
+    padding: 14px 24px;
+    font-size: 15px;
+  }
+}
