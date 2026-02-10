@@ -20,6 +20,9 @@
         <span class="sidebar-title">Projects</span>
         <button id="btn-add-project" title="Add project">+</button>
       </div>
+      <div id="sidebar-search" class="sidebar-search">
+        <input id="sidebar-filter" type="text" placeholder="Filter sessions..." autocomplete="off">
+      </div>
       <div id="project-list"></div>
     </aside>
     <div id="sidebar-divider"></div>
@@ -171,12 +174,18 @@
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>K</kbd><span>Command palette</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Tab</kbd><span>Cycle tabs</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Focus mode</span></div>
           <div class="shortcut-row"><kbd>?</kbd><span>Show shortcuts</span></div>
         </div>
         <div class="shortcuts-section">
           <h3>Session</h3>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>C</kbd><span>Interrupt Claude</span></div>
           <div class="shortcut-row"><kbd>Esc</kbd><span>Close modal / dialog</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>Tabs</h3>
+          <div class="shortcut-row"><kbd>Right-click</kbd> tab<span>Close / Close Others / Copy Path</span></div>
+          <div class="shortcut-row"><kbd>Drag</kbd> tab<span>Reorder tabs</span></div>
         </div>
         <div class="shortcuts-section">
           <h3>File Tree</h3>

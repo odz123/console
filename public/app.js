@@ -129,6 +129,12 @@
   // Notification dot state
   let gitChangesPending = false;
 
+  // Focus mode state
+  let focusModeActive = false;
+
+  // Sidebar filter ref
+  const sidebarFilter = document.getElementById('sidebar-filter');
+
   // --- Helpers ---
   function wsSend(data) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -1706,6 +1712,45 @@
 
       el.appendChild(close);
       el.onclick = () => switchTab(tab.id);
+      el.oncontextmenu = (e) => {
+        e.preventDefault();
+        showTabContextMenu(e, tab);
+      };
+
+      // Drag-and-drop reordering
+      el.draggable = true;
+      el.dataset.tabIndex = String(i);
+      el.ondragstart = (e) => {
+        e.dataTransfer.setData('text/plain', String(i));
+        el.classList.add('tab-dragging');
+      };
+      el.ondragend = () => {
+        el.classList.remove('tab-dragging');
+        tabList.querySelectorAll('.tab-drop-before, .tab-drop-after').forEach(t => {
+          t.classList.remove('tab-drop-before', 'tab-drop-after');
+        });
+      };
+      el.ondragover = (e) => {
+        e.preventDefault();
+        const rect = el.getBoundingClientRect();
+        const mid = rect.left + rect.width / 2;
+        el.classList.toggle('tab-drop-before', e.clientX < mid);
+        el.classList.toggle('tab-drop-after', e.clientX >= mid);
+      };
+      el.ondragleave = () => {
+        el.classList.remove('tab-drop-before', 'tab-drop-after');
+      };
+      el.ondrop = (e) => {
+        e.preventDefault();
+        el.classList.remove('tab-drop-before', 'tab-drop-after');
+        const fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
+        const toIdx = parseInt(el.dataset.tabIndex);
+        if (isNaN(fromIdx) || isNaN(toIdx) || fromIdx === toIdx) return;
+        const moved = openTabs.splice(fromIdx, 1)[0];
+        openTabs.splice(toIdx > fromIdx ? toIdx : toIdx, 0, moved);
+        renderTabs();
+      };
+
       tabList.appendChild(el);
     }
   }
@@ -1758,6 +1803,74 @@
       activeTabId = openTabs.length > 0 ? openTabs[openTabs.length - 1].id : 'claude';
     }
     switchTab(activeTabId);
+  }
+
+  function closeOtherTabs(tabId) {
+    openTabs = openTabs.filter(t => t.id === tabId);
+    activeTabId = tabId;
+    switchTab(activeTabId);
+  }
+
+  function closeAllTabs() {
+    openTabs = [];
+    activeTabId = 'claude';
+    switchTab('claude');
+  }
+
+  function showTabContextMenu(e, tab) {
+    // Remove any existing context menu
+    const existing = document.getElementById('tab-context-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'tab-context-menu';
+    menu.className = 'context-menu';
+
+    const items = [
+      { label: 'Close', action: () => closeTab(tab.id) },
+      { label: 'Close Others', action: () => closeOtherTabs(tab.id), disabled: openTabs.length <= 1 },
+      { label: 'Close All', action: () => closeAllTabs() },
+      { type: 'separator' },
+      { label: 'Copy Path', action: () => { navigator.clipboard.writeText(tab.fullPath).catch(() => {}); showToast('Path copied', 'info', 2000); } },
+    ];
+
+    for (const item of items) {
+      if (item.type === 'separator') {
+        const sep = document.createElement('div');
+        sep.className = 'context-menu-sep';
+        menu.appendChild(sep);
+        continue;
+      }
+      const row = document.createElement('div');
+      row.className = 'context-menu-item';
+      if (item.disabled) row.classList.add('disabled');
+      row.textContent = item.label;
+      if (!item.disabled) {
+        row.onclick = () => { menu.remove(); item.action(); };
+      }
+      menu.appendChild(row);
+    }
+
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    document.body.appendChild(menu);
+
+    // Adjust if overflowing viewport
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 4) + 'px';
+    if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 4) + 'px';
+
+    // Close on click outside or Escape
+    const cleanup = (ev) => {
+      if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', cleanup); document.removeEventListener('keydown', escCleanup); }
+    };
+    const escCleanup = (ev) => {
+      if (ev.key === 'Escape') { menu.remove(); document.removeEventListener('mousedown', cleanup); document.removeEventListener('keydown', escCleanup); }
+    };
+    setTimeout(() => {
+      document.addEventListener('mousedown', cleanup);
+      document.addEventListener('keydown', escCleanup);
+    }, 0);
   }
 
   const pendingFileOpens = new Set();
@@ -2717,6 +2830,13 @@
 
   // Extend keyboard handler: ? shows shortcuts, Ctrl+K opens palette, Esc closes
   document.addEventListener('keydown', (e) => {
+    // Ctrl+\ — toggle focus mode
+    if (e.key === '\\' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      toggleFocusMode();
+      return;
+    }
+
     // Ctrl+K — command palette (works from anywhere)
     if (e.key === 'k' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -2786,6 +2906,8 @@
         { icon: '\u21BB', label: 'Compact Context', meta: '/compact', action: () => { closeCommandPalette(); statusCompact.click(); } },
         { icon: '\u21BB', label: 'Refresh File Tree', meta: 'action', action: () => { closeCommandPalette(); renderFileTreeDir(fileTreeEl, '', 0); } },
         { icon: '\u21BB', label: 'Refresh Git Status', meta: 'action', action: () => { closeCommandPalette(); refreshGitStatus(); } },
+        { icon: '\u25A3', label: 'Toggle Focus Mode', meta: 'Ctrl+\\', action: () => { closeCommandPalette(); toggleFocusMode(); } },
+        { icon: '\u2717', label: 'Close All Tabs', meta: 'action', action: () => { closeCommandPalette(); closeAllTabs(); } },
       );
     }
 
@@ -3020,12 +3142,26 @@
 
   // --- Connection status indicator ---
 
+  let wasConnected = false;
+
   function updateConnectionStatus(connected) {
     if (!statusConnection) return;
     if (connected) {
       statusConnection.innerHTML = '<span class="status-connection-dot connected"></span> Connected';
+      // Show reconnect toast only if we were previously connected (not initial)
+      if (wasConnected === false && wasConnected !== undefined) {
+        // wasConnected starts as false; skip the very first connect
+      }
+      if (wasConnected === 'disconnected') {
+        showToast('Connection restored', 'success', 3000);
+      }
+      wasConnected = true;
     } else {
       statusConnection.innerHTML = '<span class="status-connection-dot disconnected"></span> Reconnecting\u2026';
+      if (wasConnected === true) {
+        showToast('Connection lost \u2014 reconnecting\u2026', 'warning', 5000);
+      }
+      wasConnected = 'disconnected';
     }
   }
 
@@ -3053,6 +3189,27 @@
       gitTab.appendChild(badge);
     } else if (!show && existing) {
       existing.remove();
+    }
+  }
+
+  // --- Focus mode ---
+
+  function toggleFocusMode() {
+    focusModeActive = !focusModeActive;
+    sidebar.classList.toggle('focus-hidden', focusModeActive);
+    sidebarDivider.classList.toggle('focus-hidden', focusModeActive);
+    if (focusModeActive) {
+      rightPanel.classList.add('focus-hidden');
+    } else {
+      rightPanel.classList.remove('focus-hidden');
+    }
+    // Refit terminal after layout change
+    requestAnimationFrame(() => {
+      if (fitAddon) fitAddon.fit();
+      if (shellFitAddon) shellFitAddon.fit();
+    });
+    if (focusModeActive) {
+      showToast('Focus mode on \u2014 press Ctrl+\\ to exit', 'info', 2000);
     }
   }
 
@@ -3104,6 +3261,65 @@
       }
     };
   };
+
+  // --- Sidebar filter ---
+
+  sidebarFilter.oninput = debounce(() => {
+    filterSidebar(sidebarFilter.value.trim().toLowerCase());
+  }, 150);
+
+  function filterSidebar(query) {
+    const groups = projectListEl.querySelectorAll('.project-group');
+    groups.forEach(group => {
+      const sessionItems = group.querySelectorAll('.project-sessions li[data-session-id]');
+      let visibleCount = 0;
+
+      sessionItems.forEach(li => {
+        const nameEl = li.querySelector('.session-name');
+        const branchEl = li.querySelector('.branch-badge');
+        const name = nameEl ? nameEl.textContent.toLowerCase() : '';
+        const branch = branchEl ? branchEl.textContent.toLowerCase() : '';
+        if (!query || name.includes(query) || branch.includes(query)) {
+          li.style.display = '';
+          visibleCount++;
+        } else {
+          li.style.display = 'none';
+        }
+      });
+
+      // Auto-expand project groups that have matches when filtering
+      if (query && visibleCount > 0) {
+        const ul = group.querySelector('.project-sessions');
+        if (ul && !ul.classList.contains('expanded')) {
+          ul.classList.add('expanded', 'filter-expanded');
+          const arrow = group.querySelector('.project-arrow');
+          if (arrow) arrow.classList.add('expanded');
+        }
+      }
+
+      // Hide project groups with no matching sessions (only when filtering)
+      if (query && visibleCount === 0) {
+        group.style.display = 'none';
+      } else {
+        group.style.display = '';
+      }
+    });
+
+    // Restore state when filter is cleared
+    if (!query) {
+      groups.forEach(group => {
+        const ul = group.querySelector('.project-sessions');
+        if (ul && ul.classList.contains('filter-expanded')) {
+          ul.classList.remove('filter-expanded', 'expanded');
+          const arrow = group.querySelector('.project-arrow');
+          if (arrow) arrow.classList.remove('expanded');
+        }
+        group.querySelectorAll('.project-sessions li[data-session-id]').forEach(li => {
+          li.style.display = '';
+        });
+      });
+    }
+  }
 
   // --- Init ---
   initTerminal();
