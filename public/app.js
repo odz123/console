@@ -1497,13 +1497,21 @@
     if (pendingFileOpens.has(filePath)) return;
     pendingFileOpens.add(filePath);
 
+    // Capture session ID now — if the user switches sessions while the
+    // fetch is in-flight we must discard the result rather than mixing
+    // file content from one session into another session's tab list.
+    const sessionId = activeSessionId;
+
     // Fetch file content
     let res;
     try {
-      res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(filePath)}`);
+      res = await fetch(`/api/file?sessionId=${sessionId}&path=${encodeURIComponent(filePath)}`);
     } finally {
       pendingFileOpens.delete(filePath);
     }
+
+    // Discard result if user switched sessions during the fetch
+    if (activeSessionId !== sessionId) return;
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: 'Failed to load file' }));

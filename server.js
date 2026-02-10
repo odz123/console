@@ -487,7 +487,7 @@ export function createServer({ testMode = false } = {}) {
       }
 
       // Get porcelain status
-      const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-uall'], gitOpts(cwd));
+      const { stdout } = await execFileAsync('git', ['status', '--porcelain', '-unormal'], gitOpts(cwd));
 
       const staged = [];
       const unstaged = [];
@@ -1580,12 +1580,11 @@ export function createServer({ testMode = false } = {}) {
 
         case 'shell-attach': {
           const { sessionId, cols, rows } = msg;
-          console.log('[shell-attach] sessionId:', sessionId, 'cols:', cols, 'rows:', rows);
           const session = store.getSession(sessionId);
-          if (!session) { console.log('[shell-attach] session not found'); break; }
+          if (!session) break;
 
           const project = store.getProject(session.projectId);
-          if (!project) { console.log('[shell-attach] project not found'); break; }
+          if (!project) break;
 
           // Resolve worktree path BEFORE detaching the old listener so that
           // on error the previous shell connection remains intact.
@@ -1594,9 +1593,7 @@ export function createServer({ testMode = false } = {}) {
             if (session.worktreePath) {
               try {
                 cwd = await resolveWorktreePath(project.cwd, session.worktreePath);
-                console.log('[shell-attach] resolved cwd:', cwd);
-              } catch (e) {
-                console.log('[shell-attach] resolveWorktreePath FAILED:', e.message);
+              } catch {
                 break;
               }
             }
@@ -1609,7 +1606,6 @@ export function createServer({ testMode = false } = {}) {
             }
             attachedShellSessionId = sessionId;
 
-            console.log('[shell-attach] spawning shell in:', cwd);
             manager.spawnShell(sessionId, { cwd, cols, rows });
           } else {
             // Detach previous shell listener
@@ -1870,6 +1866,7 @@ export function createServer({ testMode = false } = {}) {
 
     // Schedule periodic cleanup
     cleanupTimer = setInterval(runCleanup, CLEANUP_INTERVAL_MS);
+    cleanupTimer.unref();
   }
 
   server.destroy = () => {
