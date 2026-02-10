@@ -63,17 +63,21 @@
   const fileTreeEl = document.getElementById('file-tree');
   const tabBar = document.getElementById('tab-bar');
   const tabList = document.getElementById('tab-list');
+  const tabScrollLeft = document.getElementById('tab-scroll-left');
+  const tabScrollRight = document.getElementById('tab-scroll-right');
   const fileViewer = document.getElementById('file-viewer');
   const fileViewerPath = document.getElementById('file-viewer-path');
   const fileViewerRefresh = document.getElementById('file-viewer-refresh');
   const fileViewerWrap = document.getElementById('file-viewer-wrap');
   const fileViewerCopy = document.getElementById('file-viewer-copy');
+  const fileViewerSplit = document.getElementById('file-viewer-split');
   const fileViewerEdit = document.getElementById('file-viewer-edit');
   const fileViewerSave = document.getElementById('file-viewer-save');
   const fileViewerCancelEdit = document.getElementById('file-viewer-cancel-edit');
   const fileViewerContent = document.getElementById('file-viewer-content');
   let fileViewerWordWrap = false;
   let fileViewerEditing = false;
+  let diffSplitMode = false;
 
   // File viewer search refs
   const fvSearchBar = document.getElementById('fv-search-bar');
@@ -147,8 +151,16 @@
   // Notification dot state
   let gitChangesPending = false;
 
+  // Progress bar ref
+  const progressBar = document.getElementById('progress-bar');
+
   // Focus mode state
   let focusModeActive = false;
+
+  // Mini sidebar state
+  let sidebarCollapsed = false;
+  const sidebar = document.getElementById('sidebar');
+  const sidebarDivider = document.getElementById('sidebar-divider');
 
   // Sidebar filter ref
   const sidebarFilter = document.getElementById('sidebar-filter');
@@ -277,6 +289,11 @@
     }
     statusActivity.innerHTML =
       `<span class="status-activity-dot ${dotClass}"></span> ${label}`;
+
+    // Show/hide progress bar
+    if (progressBar) {
+      progressBar.classList.toggle('hidden', dotClass !== 'working');
+    }
 
     // Show/hide restart button based on session state
     if (!alive) {
@@ -926,6 +943,8 @@
       // Project header
       const header = document.createElement('div');
       header.className = 'project-header';
+      // Initial for mini sidebar
+      header.dataset.initial = (proj.name || 'P').charAt(0).toUpperCase();
 
       const arrow = document.createElement('span');
       arrow.className = 'project-arrow';
@@ -954,6 +973,13 @@
       header.appendChild(del);
 
       header.onclick = () => {
+        // In mini mode, expand sidebar first
+        if (sidebarCollapsed) {
+          toggleMiniSidebar();
+          expandedProjects.add(proj.id);
+          renderSidebar();
+          return;
+        }
         if (expandedProjects.has(proj.id)) {
           expandedProjects.delete(proj.id);
         } else {
@@ -1816,7 +1842,33 @@
 
       tabList.appendChild(el);
     }
+
+    // Update tab scroll arrows after render
+    requestAnimationFrame(updateTabScrollButtons);
   }
+
+  function updateTabScrollButtons() {
+    if (!tabScrollLeft || !tabScrollRight) return;
+    const overflow = tabList.scrollWidth > tabList.clientWidth;
+    if (!overflow) {
+      tabScrollLeft.classList.add('hidden');
+      tabScrollRight.classList.add('hidden');
+      return;
+    }
+    tabScrollLeft.classList.toggle('hidden', tabList.scrollLeft <= 0);
+    tabScrollRight.classList.toggle('hidden',
+      tabList.scrollLeft + tabList.clientWidth >= tabList.scrollWidth - 1);
+  }
+
+  tabScrollLeft.onclick = () => {
+    tabList.scrollBy({ left: -120, behavior: 'smooth' });
+    setTimeout(updateTabScrollButtons, 300);
+  };
+  tabScrollRight.onclick = () => {
+    tabList.scrollBy({ left: 120, behavior: 'smooth' });
+    setTimeout(updateTabScrollButtons, 300);
+  };
+  tabList.addEventListener('scroll', debounce(updateTabScrollButtons, 100));
 
   function getTopInset() {
     const tabH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--tab-bar-height')) || 32;
@@ -2038,6 +2090,103 @@
     }
   }
 
+  function renderUnifiedDiff(content) {
+    fileViewerContent.className = 'diff-view';
+    const lines = content.split('\n');
+    for (const line of lines) {
+      const lineEl = document.createElement('div');
+      lineEl.className = 'diff-line';
+      if (line.startsWith('+') && !line.startsWith('+++')) {
+        lineEl.classList.add('diff-add');
+      } else if (line.startsWith('-') && !line.startsWith('---')) {
+        lineEl.classList.add('diff-del');
+      } else if (line.startsWith('@@')) {
+        lineEl.classList.add('diff-hunk');
+      } else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
+        lineEl.classList.add('diff-header');
+      }
+      lineEl.textContent = line;
+      fileViewerContent.appendChild(lineEl);
+    }
+  }
+
+  function renderSplitDiff(content) {
+    fileViewerContent.className = 'diff-view diff-split';
+    const lines = content.split('\n');
+    const leftCol = document.createElement('div');
+    leftCol.className = 'diff-split-col diff-split-left';
+    const rightCol = document.createElement('div');
+    rightCol.className = 'diff-split-col diff-split-right';
+
+    for (const line of lines) {
+      if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
+        const lEl = document.createElement('div');
+        lEl.className = 'diff-line diff-header';
+        lEl.textContent = line;
+        leftCol.appendChild(lEl);
+        const rEl = document.createElement('div');
+        rEl.className = 'diff-line diff-header';
+        rEl.textContent = line;
+        rightCol.appendChild(rEl);
+      } else if (line.startsWith('@@')) {
+        const lEl = document.createElement('div');
+        lEl.className = 'diff-line diff-hunk';
+        lEl.textContent = line;
+        leftCol.appendChild(lEl);
+        const rEl = document.createElement('div');
+        rEl.className = 'diff-line diff-hunk';
+        rEl.textContent = line;
+        rightCol.appendChild(rEl);
+      } else if (line.startsWith('-') && !line.startsWith('---')) {
+        const lEl = document.createElement('div');
+        lEl.className = 'diff-line diff-del';
+        lEl.textContent = line.slice(1);
+        leftCol.appendChild(lEl);
+        const rEl = document.createElement('div');
+        rEl.className = 'diff-line diff-empty';
+        rEl.textContent = '\u00A0';
+        rightCol.appendChild(rEl);
+      } else if (line.startsWith('+') && !line.startsWith('+++')) {
+        const lEl = document.createElement('div');
+        lEl.className = 'diff-line diff-empty';
+        lEl.textContent = '\u00A0';
+        leftCol.appendChild(lEl);
+        const rEl = document.createElement('div');
+        rEl.className = 'diff-line diff-add';
+        rEl.textContent = line.slice(1);
+        rightCol.appendChild(rEl);
+      } else {
+        const text = line.startsWith(' ') ? line.slice(1) : line;
+        const lEl = document.createElement('div');
+        lEl.className = 'diff-line';
+        lEl.textContent = text;
+        leftCol.appendChild(lEl);
+        const rEl = document.createElement('div');
+        rEl.className = 'diff-line';
+        rEl.textContent = text;
+        rightCol.appendChild(rEl);
+      }
+    }
+
+    fileViewerContent.appendChild(leftCol);
+    fileViewerContent.appendChild(rightCol);
+  }
+
+  // Split diff toggle
+  fileViewerSplit.onclick = () => {
+    diffSplitMode = !diffSplitMode;
+    fileViewerSplit.classList.toggle('fv-btn-active', diffSplitMode);
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (tab && tab.type === 'diff') {
+      fileViewerContent.innerHTML = '';
+      if (diffSplitMode) {
+        renderSplitDiff(tab.content);
+      } else {
+        renderUnifiedDiff(tab.content);
+      }
+    }
+  };
+
   function renderFileContent(tab) {
     renderFileViewerBreadcrumb(tab.fullPath);
     fileViewerContent.innerHTML = '';
@@ -2057,37 +2206,52 @@
     }
 
     if (tab.type === 'diff') {
-      fileViewerContent.className = 'diff-view';
-      const lines = tab.content.split('\n');
-      for (const line of lines) {
-        const lineEl = document.createElement('div');
-        lineEl.className = 'diff-line';
-        if (line.startsWith('+') && !line.startsWith('+++')) {
-          lineEl.classList.add('diff-add');
-        } else if (line.startsWith('-') && !line.startsWith('---')) {
-          lineEl.classList.add('diff-del');
-        } else if (line.startsWith('@@')) {
-          lineEl.classList.add('diff-hunk');
-        } else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
-          lineEl.classList.add('diff-header');
-        }
-        lineEl.textContent = line;
-        fileViewerContent.appendChild(lineEl);
+      fileViewerSplit.classList.remove('hidden');
+      if (diffSplitMode) {
+        renderSplitDiff(tab.content);
+      } else {
+        renderUnifiedDiff(tab.content);
       }
       return;
     }
+    fileViewerSplit.classList.add('hidden');
 
     // Plain text with line numbers
     fileViewerContent.className = 'plain-text';
     const lines = tab.content.split('\n');
-    const gutter = document.createElement('div');
-    gutter.className = 'line-numbers';
-    gutter.textContent = lines.map((_, i) => i + 1).join('\n');
-    const code = document.createElement('div');
-    code.className = 'line-content';
-    code.textContent = tab.content;
-    fileViewerContent.appendChild(gutter);
-    fileViewerContent.appendChild(code);
+    const table = document.createElement('div');
+    table.className = 'line-table';
+    for (let i = 0; i < lines.length; i++) {
+      const row = document.createElement('div');
+      row.className = 'line-row';
+      row.dataset.lineNum = i + 1;
+      const num = document.createElement('span');
+      num.className = 'line-num';
+      num.textContent = i + 1;
+      num.onclick = () => highlightLine(row);
+      const text = document.createElement('span');
+      text.className = 'line-text';
+      text.textContent = lines[i];
+      row.appendChild(num);
+      row.appendChild(text);
+      table.appendChild(row);
+    }
+    fileViewerContent.appendChild(table);
+  }
+
+  function highlightLine(rowEl) {
+    // Clear previous highlight
+    const prev = fileViewerContent.querySelector('.line-row.line-highlighted');
+    if (prev) prev.classList.remove('line-highlighted');
+    rowEl.classList.add('line-highlighted');
+  }
+
+  function goToLine(lineNum) {
+    const row = fileViewerContent.querySelector(`.line-row[data-line-num="${lineNum}"]`);
+    if (row) {
+      highlightLine(row);
+      row.scrollIntoView({ block: 'center' });
+    }
   }
 
   // Refresh button handler
@@ -2331,6 +2495,43 @@
   fvSearchPrev.onclick = () => navigateFvSearch(-1);
   fvSearchClose.onclick = closeFvSearch;
 
+  // --- Go to line ---
+  function openGoToLine() {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || !tab.content) return;
+    const totalLines = tab.content.split('\n').length;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'goto-overlay';
+    const box = document.createElement('div');
+    box.className = 'goto-box';
+    const label = document.createElement('label');
+    label.textContent = `Go to line (1\u2013${totalLines}):`;
+    label.className = 'goto-label';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = 1;
+    input.max = totalLines;
+    input.className = 'goto-input';
+    input.placeholder = 'Line number';
+    box.appendChild(label);
+    box.appendChild(input);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    input.focus();
+
+    const cleanup = () => overlay.remove();
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        const num = parseInt(input.value);
+        if (num >= 1 && num <= totalLines) goToLine(num);
+        cleanup();
+      }
+      if (e.key === 'Escape') cleanup();
+    };
+    overlay.onclick = (e) => { if (e.target === overlay) cleanup(); };
+  }
+
   // Keyboard shortcuts (only when terminal is NOT focused)
   document.addEventListener('keydown', (e) => {
     const inTerminal = terminalEl.contains(document.activeElement) ||
@@ -2341,6 +2542,13 @@
     if (e.key === 'f' && (e.ctrlKey || e.metaKey) && activeTabId !== 'claude') {
       e.preventDefault();
       openFvSearch();
+      return;
+    }
+
+    // Ctrl+G — go to line (only when viewing a file)
+    if (e.key === 'g' && (e.ctrlKey || e.metaKey) && activeTabId !== 'claude') {
+      e.preventDefault();
+      openGoToLine();
       return;
     }
 
@@ -2962,8 +3170,6 @@
 
   // --- Sidebar Divider Drag ---
 
-  const sidebar = document.getElementById('sidebar');
-  const sidebarDivider = document.getElementById('sidebar-divider');
   let isSidebarDragging = false;
   let sidebarRafPending = false;
 
@@ -3164,6 +3370,13 @@
 
   // Extend keyboard handler: ? shows shortcuts, Ctrl+K opens palette, Esc closes
   document.addEventListener('keydown', (e) => {
+    // Ctrl+B — toggle mini sidebar
+    if (e.key === 'b' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      toggleMiniSidebar();
+      return;
+    }
+
     // Ctrl+\ — toggle focus mode
     if (e.key === '\\' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -3257,6 +3470,7 @@
         { icon: '\u21BB', label: 'Compact Context', meta: '/compact', action: () => { closeCommandPalette(); statusCompact.click(); } },
         { icon: '\u21BB', label: 'Refresh File Tree', meta: 'action', action: () => { closeCommandPalette(); renderFileTreeDir(fileTreeEl, '', 0); } },
         { icon: '\u21BB', label: 'Refresh Git Status', meta: 'action', action: () => { closeCommandPalette(); refreshGitStatus(); } },
+        { icon: '\u25A3', label: 'Toggle Sidebar', meta: 'Ctrl+B', action: () => { closeCommandPalette(); toggleMiniSidebar(); } },
         { icon: '\u25A3', label: 'Toggle Focus Mode', meta: 'Ctrl+\\', action: () => { closeCommandPalette(); toggleFocusMode(); } },
         { icon: '\u2717', label: 'Close All Tabs', meta: 'action', action: () => { closeCommandPalette(); closeAllTabs(); } },
       );
@@ -3659,6 +3873,17 @@
       if (shellFitAddon) shellFitAddon.fit();
     }
     updateFontSizeDisplay();
+  }
+
+  // --- Mini sidebar toggle ---
+
+  function toggleMiniSidebar() {
+    sidebarCollapsed = !sidebarCollapsed;
+    sidebar.classList.toggle('sidebar-mini', sidebarCollapsed);
+    requestAnimationFrame(() => {
+      if (fitAddon) fitAddon.fit();
+      if (shellFitAddon) shellFitAddon.fit();
+    });
   }
 
   // --- Focus mode ---

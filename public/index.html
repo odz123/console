@@ -32,8 +32,11 @@
         <span class="breadcrumb-divider">/</span>
         <span id="breadcrumb-session" class="breadcrumb-segment breadcrumb-active"></span>
       </div>
+      <div id="progress-bar" class="progress-bar hidden"></div>
       <div id="tab-bar">
+        <button id="tab-scroll-left" class="tab-scroll-btn hidden" title="Scroll left">&#x25C0;</button>
         <div id="tab-list"></div>
+        <button id="tab-scroll-right" class="tab-scroll-btn hidden" title="Scroll right">&#x25B6;</button>
       </div>
       <div id="terminal-wrapper">
         <div id="terminal"></div>
@@ -45,6 +48,7 @@
             <button id="file-viewer-edit" class="fv-btn" title="Edit file">Edit</button>
             <button id="file-viewer-save" class="fv-btn fv-btn-save hidden" title="Save changes">Save</button>
             <button id="file-viewer-cancel-edit" class="fv-btn hidden" title="Cancel editing">Cancel</button>
+            <button id="file-viewer-split" class="fv-btn hidden" title="Toggle split diff view">Split</button>
             <button id="file-viewer-wrap" class="fv-btn" title="Toggle word wrap">Wrap</button>
             <button id="file-viewer-copy" class="fv-btn" title="Copy file content">Copy</button>
             <button id="file-viewer-refresh" title="Refresh">Refresh</button>
@@ -193,6 +197,8 @@
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Tab</kbd><span>Cycle tabs</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find in file</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>G</kbd><span>Go to line</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>B</kbd><span>Toggle sidebar</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Focus mode</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>=</kbd>/<kbd>-</kbd><span>Zoom in / out</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>0</kbd><span>Reset zoom</span></div>

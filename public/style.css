@@ -60,6 +60,48 @@ body {
 }
 #btn-add-project:hover { background: #d97757; }
 
+/* Mini sidebar (collapsed) */
+#sidebar.sidebar-mini {
+  width: 48px;
+  min-width: 48px;
+}
+#sidebar.sidebar-mini #sidebar-header {
+  padding: 12px 8px;
+  justify-content: center;
+}
+#sidebar.sidebar-mini .sidebar-title,
+#sidebar.sidebar-mini #btn-add-project {
+  display: none;
+}
+#sidebar.sidebar-mini .sidebar-search {
+  display: none;
+}
+#sidebar.sidebar-mini .project-header {
+  padding: 6px 0;
+  justify-content: center;
+}
+#sidebar.sidebar-mini .project-name,
+#sidebar.sidebar-mini .project-arrow,
+#sidebar.sidebar-mini .project-delete {
+  display: none;
+}
+#sidebar.sidebar-mini .project-header::after {
+  content: attr(data-initial);
+  width: 28px;
+  height: 28px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: #3d3a36;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: #c4956a;
+}
+#sidebar.sidebar-mini .project-sessions {
+  display: none;
+}
+
 /* --- Sidebar search --- */
 
 .sidebar-search {
@@ -1004,6 +1046,31 @@ body {
 }
 .confirm-ok:hover { background: #d95555; }
 
+/* --- Progress bar --- */
+
+.progress-bar {
+  position: absolute;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 2px;
+  z-index: 10;
+  overflow: hidden;
+}
+.progress-bar.hidden { display: none; }
+.progress-bar::after {
+  content: '';
+  display: block;
+  width: 40%;
+  height: 100%;
+  background: linear-gradient(90deg, transparent, #d97757, transparent);
+  animation: progress-slide 1.4s ease-in-out infinite;
+}
+@keyframes progress-slide {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(350%); }
+}
+
 /* --- Tab bar --- */
 
 #tab-bar {
@@ -1012,8 +1079,8 @@ body {
   border-bottom: 1px solid #3d3a36;
   display: none;
   align-items: center;
-  padding: 0 4px;
-  overflow-x: auto;
+  padding: 0 0 0 4px;
+  overflow: hidden;
   flex-shrink: 0;
   position: relative;
   z-index: 2;
@@ -1026,7 +1093,28 @@ body {
   display: flex;
   gap: 2px;
   align-items: center;
+  overflow-x: auto;
+  scrollbar-width: none; /* Firefox */
+  flex: 1;
+  min-width: 0;
 }
+#tab-list::-webkit-scrollbar { display: none; }
+
+.tab-scroll-btn {
+  flex-shrink: 0;
+  width: 20px;
+  height: 24px;
+  background: #343230;
+  border: none;
+  color: #8c8478;
+  font-size: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.tab-scroll-btn:hover { color: #f0ebe3; background: #3d3a36; }
+.tab-scroll-btn.hidden { display: none; }
 
 .tab {
   display: flex;
@@ -1383,6 +1471,79 @@ body {
   background: #302f2c;
 }
 
+/* Line table layout */
+.line-table {
+  display: flex;
+  flex-direction: column;
+}
+.line-row {
+  display: flex;
+  min-height: 1.5em;
+}
+.line-row.line-highlighted {
+  background: rgba(217, 119, 87, 0.18);
+}
+.line-num {
+  text-align: right;
+  padding-right: 12px;
+  margin-right: 12px;
+  border-right: 1px solid #3d3a36;
+  color: #8c8478;
+  user-select: none;
+  cursor: pointer;
+  flex-shrink: 0;
+  min-width: 40px;
+}
+.line-num:hover {
+  color: #d97757;
+}
+.line-text {
+  white-space: pre;
+  flex: 1;
+  min-width: 0;
+}
+#file-viewer-content.word-wrap .line-text {
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+/* Go-to-line dialog */
+.goto-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.4);
+  display: flex;
+  align-items: flex-start;
+  justify-content: center;
+  padding-top: 20vh;
+  z-index: 350;
+}
+.goto-box {
+  background: #343230;
+  border: 1px solid #3d3a36;
+  border-radius: 8px;
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  min-width: 220px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.goto-label {
+  font-size: 12px;
+  color: #8c8478;
+}
+.goto-input {
+  padding: 6px 8px;
+  background: #2b2a27;
+  border: 1px solid #3d3a36;
+  border-radius: 4px;
+  color: #f0ebe3;
+  font-size: 14px;
+  outline: none;
+}
+.goto-input:focus { border-color: #d97757; }
+
 /* Binary file placeholder */
 #file-viewer-content.binary-file {
   display: flex;
@@ -1428,6 +1589,33 @@ body {
 .diff-header {
   color: #8c8478;
   font-style: italic;
+}
+
+.diff-empty {
+  background: rgba(60, 58, 54, 0.3);
+}
+
+/* Split diff view */
+#file-viewer-content.diff-split {
+  display: flex;
+  gap: 0;
+  padding: 0;
+}
+.diff-split-col {
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+  padding: 8px 0;
+  border-right: 1px solid #3d3a36;
+}
+.diff-split-col:last-child {
+  border-right: none;
+}
+.diff-split-left .diff-line {
+  white-space: pre;
+}
+.diff-split-right .diff-line {
+  white-space: pre;
 }
 
 /* --- Right panel tabs --- */
