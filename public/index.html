@@ -20,12 +20,23 @@
         <span class="sidebar-title">Projects</span>
         <button id="btn-add-project" title="Add project">+</button>
       </div>
+      <div id="sidebar-search" class="sidebar-search">
+        <input id="sidebar-filter" type="text" placeholder="Filter sessions..." autocomplete="off">
+      </div>
       <div id="project-list"></div>
     </aside>
     <div id="sidebar-divider"></div>
     <main id="terminal-container">
+      <div id="breadcrumb-bar" class="hidden">
+        <span id="breadcrumb-project" class="breadcrumb-segment"></span>
+        <span class="breadcrumb-divider">/</span>
+        <span id="breadcrumb-session" class="breadcrumb-segment breadcrumb-active"></span>
+      </div>
+      <div id="progress-bar" class="progress-bar hidden"></div>
       <div id="tab-bar">
+        <button id="tab-scroll-left" class="tab-scroll-btn hidden" title="Scroll left">&#x25C0;</button>
         <div id="tab-list"></div>
+        <button id="tab-scroll-right" class="tab-scroll-btn hidden" title="Scroll right">&#x25B6;</button>
       </div>
       <div id="terminal-wrapper">
         <div id="terminal"></div>
@@ -33,12 +44,58 @@
       <div id="file-viewer" class="hidden">
         <div id="file-viewer-toolbar">
           <span id="file-viewer-path"></span>
-          <button id="file-viewer-refresh" title="Refresh">Refresh</button>
+          <div class="file-viewer-actions">
+            <button id="file-viewer-edit" class="fv-btn" title="Edit file">Edit</button>
+            <button id="file-viewer-save" class="fv-btn fv-btn-save hidden" title="Save changes">Save</button>
+            <button id="file-viewer-cancel-edit" class="fv-btn hidden" title="Cancel editing">Cancel</button>
+            <button id="file-viewer-split" class="fv-btn hidden" title="Toggle split diff view">Split</button>
+            <button id="file-viewer-wrap" class="fv-btn" title="Toggle word wrap">Wrap</button>
+            <button id="file-viewer-copy" class="fv-btn" title="Copy file content">Copy</button>
+            <button id="file-viewer-refresh" title="Refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="fv-search-bar" class="fv-search-bar hidden">
+          <input id="fv-search-input" type="text" placeholder="Find in file..." autocomplete="off">
+          <span id="fv-search-count" class="fv-search-count"></span>
+          <button id="fv-search-prev" class="fv-search-btn" title="Previous">&uarr;</button>
+          <button id="fv-search-next" class="fv-search-btn" title="Next">&darr;</button>
+          <button id="fv-search-close" class="fv-search-btn" title="Close">&times;</button>
         </div>
         <div id="file-viewer-content"></div>
       </div>
       <div id="no-session">
-        <button id="btn-home-add-project" class="home-add-btn">Add Project</button>
+        <div class="landing-page">
+          <div class="landing-logo">&#10022;</div>
+          <h1 class="landing-title">Claude Console</h1>
+          <p class="landing-subtitle">Multi-session manager for Claude Code</p>
+          <div id="landing-recent" class="landing-recent"></div>
+          <button id="btn-home-add-project" class="home-add-btn">+ New Project</button>
+          <div class="landing-hints">
+            <span class="landing-hint">Click a session in the sidebar to resume</span>
+          </div>
+        </div>
+      </div>
+      <div id="status-bar" class="hidden">
+        <div class="status-bar-left">
+          <span id="status-provider" class="status-item status-provider-badge"></span>
+          <span class="status-sep">|</span>
+          <span id="status-branch" class="status-item"></span>
+          <span class="status-sep">|</span>
+          <span id="status-duration" class="status-item"></span>
+          <span class="status-sep">|</span>
+          <span id="status-font-size" class="status-item status-font-size" title="Font size (Ctrl+/-)"></span>
+          <span id="status-changes" class="status-item status-changes hidden" title="Changed files — click to open git panel"></span>
+        </div>
+        <div class="status-bar-right">
+          <span id="status-activity" class="status-item"></span>
+          <span class="status-sep">|</span>
+          <span id="status-connection" class="status-item"></span>
+          <span class="status-sep status-sep-controls">|</span>
+          <button id="status-interrupt" class="status-btn" title="Send interrupt (Ctrl+C)">Interrupt</button>
+          <button id="status-compact" class="status-btn" title="Send /compact to reduce context">Compact</button>
+          <button id="status-restart" class="status-btn status-btn-restart hidden" title="Restart session">Restart</button>
+          <button id="status-copy-cli" class="status-btn" title="Copy CLI resume command">CLI</button>
+        </div>
       </div>
     </main>
     <aside id="right-panel" class="hidden">
@@ -51,6 +108,9 @@
           <span id="right-panel-path"></span>
           <button id="btn-refresh-file-tree" class="panel-toggle" title="Refresh file tree">&#x21BB;</button>
           <button id="btn-toggle-file-tree" class="panel-toggle" title="Collapse file tree">&#x25BC;</button>
+        </div>
+        <div class="file-tree-search">
+          <input id="file-tree-filter" type="text" placeholder="Filter files..." autocomplete="off">
         </div>
         <div id="file-tree" class="file-tree-container"></div>
         <div id="git-panel" class="git-panel hidden">
@@ -105,6 +165,66 @@
       <div class="modal-buttons">
         <button id="btn-modal-cancel">Cancel</button>
         <button id="btn-modal-create" disabled>Create Project</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Command palette -->
+  <div id="command-palette-overlay" class="hidden">
+    <div id="command-palette">
+      <div class="cp-input-row">
+        <span class="cp-icon">&#10022;</span>
+        <input id="cp-input" type="text" placeholder="Search files, sessions, or actions..." autocomplete="off">
+      </div>
+      <div id="cp-results" class="cp-results"></div>
+    </div>
+  </div>
+
+  <!-- Scroll to bottom button -->
+  <button id="scroll-to-bottom" class="scroll-to-bottom hidden" title="Scroll to bottom">&#x25BC;</button>
+
+  <!-- Keyboard shortcuts modal -->
+  <div id="shortcuts-overlay" class="hidden">
+    <div id="shortcuts-modal">
+      <div class="shortcuts-header">
+        <h2>Keyboard Shortcuts</h2>
+        <button id="btn-close-shortcuts" class="shortcuts-close">&times;</button>
+      </div>
+      <div class="shortcuts-body">
+        <div class="shortcuts-section">
+          <h3>Navigation</h3>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>K</kbd><span>Command palette</span></div>
+          <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Tab</kbd><span>Cycle tabs</span></div>
+          <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find in file</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>G</kbd><span>Go to line</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>B</kbd><span>Toggle sidebar</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Focus mode</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>=</kbd>/<kbd>-</kbd><span>Zoom in / out</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>0</kbd><span>Reset zoom</span></div>
+          <div class="shortcut-row"><kbd>?</kbd><span>Show shortcuts</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>Session</h3>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>C</kbd><span>Interrupt Claude</span></div>
+          <div class="shortcut-row"><kbd>Esc</kbd><span>Close modal / dialog</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>Tabs</h3>
+          <div class="shortcut-row"><kbd>Right-click</kbd> tab<span>Close / Close Others / Copy Path</span></div>
+          <div class="shortcut-row"><kbd>Drag</kbd> tab<span>Reorder tabs</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>File Tree</h3>
+          <div class="shortcut-row"><kbd>Click</kbd> folder<span>Expand / collapse</span></div>
+          <div class="shortcut-row"><kbd>Click</kbd> file<span>Open in tab</span></div>
+          <div class="shortcut-row">Filter input<span>Search files by name</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>Git Panel</h3>
+          <div class="shortcut-row"><kbd>Click</kbd> file row<span>View diff</span></div>
+          <div class="shortcut-row"><kbd>Enter</kbd> in commit<span>Commit staged</span></div>
+        </div>
       </div>
     </div>
   </div>

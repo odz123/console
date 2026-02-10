@@ -63,10 +63,31 @@
   const fileTreeEl = document.getElementById('file-tree');
   const tabBar = document.getElementById('tab-bar');
   const tabList = document.getElementById('tab-list');
+  const tabScrollLeft = document.getElementById('tab-scroll-left');
+  const tabScrollRight = document.getElementById('tab-scroll-right');
   const fileViewer = document.getElementById('file-viewer');
   const fileViewerPath = document.getElementById('file-viewer-path');
   const fileViewerRefresh = document.getElementById('file-viewer-refresh');
+  const fileViewerWrap = document.getElementById('file-viewer-wrap');
+  const fileViewerCopy = document.getElementById('file-viewer-copy');
+  const fileViewerSplit = document.getElementById('file-viewer-split');
+  const fileViewerEdit = document.getElementById('file-viewer-edit');
+  const fileViewerSave = document.getElementById('file-viewer-save');
+  const fileViewerCancelEdit = document.getElementById('file-viewer-cancel-edit');
   const fileViewerContent = document.getElementById('file-viewer-content');
+  let fileViewerWordWrap = false;
+  let fileViewerEditing = false;
+  let diffSplitMode = false;
+
+  // File viewer search refs
+  const fvSearchBar = document.getElementById('fv-search-bar');
+  const fvSearchInput = document.getElementById('fv-search-input');
+  const fvSearchCount = document.getElementById('fv-search-count');
+  const fvSearchPrev = document.getElementById('fv-search-prev');
+  const fvSearchNext = document.getElementById('fv-search-next');
+  const fvSearchClose = document.getElementById('fv-search-close');
+  let fvSearchMatches = [];
+  let fvSearchCurrentIdx = -1;
   const btnToggleFileTree = document.getElementById('btn-toggle-file-tree');
   const btnRefreshFileTree = document.getElementById('btn-refresh-file-tree');
   const fileTreeSection = document.getElementById('file-tree-section');
@@ -85,6 +106,75 @@
   const rightPanelTabs = document.getElementById('right-panel-tabs');
   let activeRightPanelTab = 'files';
   let gitLogExpanded = false;
+
+  // Status bar refs
+  const statusBar = document.getElementById('status-bar');
+  const statusProvider = document.getElementById('status-provider');
+  const statusBranch = document.getElementById('status-branch');
+  const statusDuration = document.getElementById('status-duration');
+  const statusActivity = document.getElementById('status-activity');
+  const landingRecent = document.getElementById('landing-recent');
+  let statusDurationTimer = null;
+
+  // Breadcrumb bar refs
+  const breadcrumbBar = document.getElementById('breadcrumb-bar');
+  const breadcrumbProject = document.getElementById('breadcrumb-project');
+  const breadcrumbSession = document.getElementById('breadcrumb-session');
+
+  // Session control refs
+  const statusInterrupt = document.getElementById('status-interrupt');
+  const statusCompact = document.getElementById('status-compact');
+
+  // File tree filter ref
+  const fileTreeFilter = document.getElementById('file-tree-filter');
+
+  // Keyboard shortcuts ref
+  const shortcutsOverlay = document.getElementById('shortcuts-overlay');
+
+  // Command palette refs
+  const cpOverlay = document.getElementById('command-palette-overlay');
+  const cpInput = document.getElementById('cp-input');
+  const cpResults = document.getElementById('cp-results');
+  let cpSelectedIndex = -1;
+
+  // Scroll-to-bottom ref
+  const scrollToBottomBtn = document.getElementById('scroll-to-bottom');
+
+  // Live sidebar timer
+  let sidebarTimeTimer = null;
+
+  // Connection/restart/CLI refs
+  const statusConnection = document.getElementById('status-connection');
+  const statusRestart = document.getElementById('status-restart');
+  const statusCopyCli = document.getElementById('status-copy-cli');
+
+  // Notification dot state
+  let gitChangesPending = false;
+
+  // Progress bar ref
+  const progressBar = document.getElementById('progress-bar');
+
+  // Focus mode state
+  let focusModeActive = false;
+
+  // Mini sidebar state
+  let sidebarCollapsed = false;
+  const sidebar = document.getElementById('sidebar');
+  const sidebarDivider = document.getElementById('sidebar-divider');
+
+  // Sidebar filter ref
+  const sidebarFilter = document.getElementById('sidebar-filter');
+
+  // Git status cache for file tree change indicators
+  let gitFileStatusMap = new Map(); // filePath -> status letter (M, A, D, ?, etc.)
+
+  // Terminal font size zoom
+  const statusFontSize = document.getElementById('status-font-size');
+  const statusChanges = document.getElementById('status-changes');
+  const DEFAULT_FONT_SIZE = 13;
+  const MIN_FONT_SIZE = 8;
+  const MAX_FONT_SIZE = 24;
+  let termFontSize = DEFAULT_FONT_SIZE;
 
   // --- Helpers ---
   function wsSend(data) {
@@ -112,6 +202,188 @@
     if (days < 30) return `${days}d ago`;
     const months = Math.floor(days / 30);
     return `${months}mo ago`;
+  }
+
+  // --- File type icons ---
+  const FILE_ICONS = {
+    js: ['JS', 'file-icon-js'], mjs: ['JS', 'file-icon-js'], cjs: ['JS', 'file-icon-js'],
+    ts: ['TS', 'file-icon-ts'], tsx: ['TS', 'file-icon-ts'], jsx: ['JS', 'file-icon-js'],
+    py: ['Py', 'file-icon-py'],
+    json: ['{}', 'file-icon-json'], jsonc: ['{}', 'file-icon-json'],
+    md: ['M', 'file-icon-md'], markdown: ['M', 'file-icon-md'],
+    css: ['#', 'file-icon-css'], scss: ['#', 'file-icon-css'], less: ['#', 'file-icon-css'],
+    html: ['<>', 'file-icon-html'], htm: ['<>', 'file-icon-html'],
+    svg: ['Sv', 'file-icon-img'], png: ['Im', 'file-icon-img'], jpg: ['Im', 'file-icon-img'],
+    jpeg: ['Im', 'file-icon-img'], gif: ['Im', 'file-icon-img'], webp: ['Im', 'file-icon-img'],
+    sh: ['$', 'file-icon-sh'], bash: ['$', 'file-icon-sh'], zsh: ['$', 'file-icon-sh'],
+    yml: ['Y', 'file-icon-yml'], yaml: ['Y', 'file-icon-yml'], toml: ['T', 'file-icon-yml'],
+    lock: ['Lk', 'file-icon-lock'],
+    go: ['Go', 'file-icon-ts'], rs: ['Rs', 'file-icon-ts'], rb: ['Rb', 'file-icon-py'],
+    java: ['Jv', 'file-icon-ts'], c: ['C', 'file-icon-ts'], h: ['H', 'file-icon-ts'],
+    cpp: ['C+', 'file-icon-ts'], vue: ['V', 'file-icon-js'], svelte: ['Sv', 'file-icon-js'],
+  };
+
+  function getFileIcon(filename) {
+    const ext = filename.includes('.') ? filename.split('.').pop().toLowerCase() : '';
+    return FILE_ICONS[ext] || ['\u00b7', 'file-icon-default'];
+  }
+
+  function createFileIcon(filename, extraClass) {
+    const [text, cls] = getFileIcon(filename);
+    const icon = document.createElement('span');
+    icon.className = `${extraClass || 'file-icon'} ${cls}`;
+    icon.textContent = text;
+    return icon;
+  }
+
+  // --- Status bar ---
+  function formatDuration(isoString) {
+    const diff = Date.now() - new Date(isoString).getTime();
+    const secs = Math.floor(diff / 1000);
+    if (secs < 60) return `${secs}s`;
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ${secs % 60}s`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ${mins % 60}m`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ${hrs % 24}h`;
+  }
+
+  function updateStatusBar() {
+    if (!activeSessionId) {
+      statusBar.classList.add('hidden');
+      clearInterval(statusDurationTimer);
+      statusDurationTimer = null;
+      return;
+    }
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session) {
+      statusBar.classList.add('hidden');
+      return;
+    }
+    statusBar.classList.remove('hidden');
+
+    // Provider
+    const provName = session.provider === 'codex' ? 'Codex' : 'Claude';
+    statusProvider.textContent = provName;
+
+    // Branch
+    statusBranch.textContent = session.branchName || 'no branch';
+
+    // Duration
+    statusDuration.textContent = formatDuration(session.createdAt);
+
+    // Activity
+    const idle = sessionIdleState.get(activeSessionId);
+    const alive = session.alive !== false;
+    let dotClass, label;
+    if (!alive) {
+      dotClass = 'exited';
+      label = 'Exited';
+    } else if (idle === false) {
+      dotClass = 'working';
+      label = 'Working...';
+    } else {
+      dotClass = 'idle';
+      label = 'Idle';
+    }
+    statusActivity.innerHTML =
+      `<span class="status-activity-dot ${dotClass}"></span> ${label}`;
+
+    // Show/hide progress bar
+    if (progressBar) {
+      progressBar.classList.toggle('hidden', dotClass !== 'working');
+    }
+
+    // Show/hide restart button based on session state
+    if (!alive) {
+      statusRestart.classList.remove('hidden');
+      statusInterrupt.style.display = 'none';
+      statusCompact.style.display = 'none';
+    } else {
+      statusRestart.classList.add('hidden');
+      statusInterrupt.style.display = '';
+      statusCompact.style.display = '';
+    }
+
+    // Adjust terminal wrapper inset for status bar + breadcrumb
+    const termWrapper = document.getElementById('terminal-wrapper');
+    if (termWrapper && termWrapper.style.display !== 'none') {
+      termWrapper.style.inset = `${getTopInset()} 0 24px 0`;
+    }
+
+    // Start duration timer if not running
+    if (!statusDurationTimer) {
+      statusDurationTimer = setInterval(() => {
+        const s = sessions.find(s2 => s2.id === activeSessionId);
+        if (s) statusDuration.textContent = formatDuration(s.createdAt);
+      }, 1000);
+    }
+  }
+
+  // --- Landing page ---
+  function renderLandingRecent() {
+    if (!landingRecent) return;
+    // Show up to 5 most recent sessions across all projects
+    const recentSessions = [...sessions]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 5);
+
+    if (recentSessions.length === 0) {
+      landingRecent.innerHTML = '';
+      return;
+    }
+
+    const header = document.createElement('div');
+    header.className = 'landing-recent-header';
+    header.textContent = 'Recent Sessions';
+
+    const list = document.createElement('ul');
+    list.className = 'landing-recent-list';
+
+    for (const s of recentSessions) {
+      const li = document.createElement('li');
+      li.className = 'landing-recent-item';
+
+      const dot = document.createElement('span');
+      dot.className = `landing-recent-dot ${s.alive ? 'alive' : 'exited'}`;
+
+      const name = document.createElement('span');
+      name.className = 'landing-recent-name';
+      const project = projects.find(p => p.id === s.projectId);
+      name.textContent = (project ? project.name + ' / ' : '') + (s.name || 'Untitled');
+
+      const meta = document.createElement('span');
+      meta.className = 'landing-recent-meta';
+      meta.textContent = relativeTime(s.createdAt);
+
+      li.appendChild(dot);
+      li.appendChild(name);
+      li.appendChild(meta);
+      li.onclick = () => attachSession(s.id);
+      list.appendChild(li);
+    }
+
+    landingRecent.innerHTML = '';
+    landingRecent.appendChild(header);
+    landingRecent.appendChild(list);
+  }
+
+  // --- Breadcrumb bar ---
+  function updateBreadcrumb() {
+    if (!activeSessionId) {
+      breadcrumbBar.classList.add('hidden');
+      return;
+    }
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session) {
+      breadcrumbBar.classList.add('hidden');
+      return;
+    }
+    const project = projects.find(p => p.id === session.projectId);
+    breadcrumbProject.textContent = project ? project.name : 'Unknown';
+    breadcrumbSession.textContent = session.name || 'Untitled';
+    breadcrumbBar.classList.remove('hidden');
   }
 
   // --- Toast notifications ---
@@ -217,27 +489,27 @@
       letterSpacing: 0,
       allowTransparency: false,
       theme: {
-        background: '#1a1a2e',
-        foreground: '#d4d4d4',
-        cursor: '#e94560',
-        cursorAccent: '#1a1a2e',
-        selectionBackground: '#3a3a5e',
-        black: '#1a1a2e',
-        red: '#f44747',
-        green: '#4ec9b0',
-        yellow: '#dcdcaa',
-        blue: '#569cd6',
-        magenta: '#c586c0',
-        cyan: '#9cdcfe',
-        white: '#d4d4d4',
-        brightBlack: '#6b7280',
-        brightRed: '#f44747',
-        brightGreen: '#4ec9b0',
-        brightYellow: '#dcdcaa',
-        brightBlue: '#569cd6',
-        brightMagenta: '#c586c0',
-        brightCyan: '#9cdcfe',
-        brightWhite: '#ffffff',
+        background: '#2b2a27',
+        foreground: '#e8dfd5',
+        cursor: '#d97757',
+        cursorAccent: '#2b2a27',
+        selectionBackground: '#4a4540',
+        black: '#2b2a27',
+        red: '#d95555',
+        green: '#7cba6a',
+        yellow: '#d4b87a',
+        blue: '#7aadca',
+        magenta: '#c97a9c',
+        cyan: '#88c8b8',
+        white: '#e8dfd5',
+        brightBlack: '#8c8478',
+        brightRed: '#e06666',
+        brightGreen: '#8ece7e',
+        brightYellow: '#e0c88e',
+        brightBlue: '#8ebdd0',
+        brightMagenta: '#d98eb0',
+        brightCyan: '#9ed0c4',
+        brightWhite: '#fff8f0',
       },
     });
 
@@ -301,6 +573,7 @@
       if (was && !claudeSticky) {
         console.debug('[scroll] claude: user scrolled away from bottom');
       }
+      updateScrollToBottomBtn();
     });
 
     // Sticky scroll: scroll after writes are parsed
@@ -309,6 +582,7 @@
       claudePendingScroll = false;
       term.scrollToBottom();
       claudeSticky = true;
+      updateScrollToBottomBtn();
     });
   }
 
@@ -323,27 +597,27 @@
       letterSpacing: 0,
       allowTransparency: false,
       theme: {
-        background: '#1a1a2e',
-        foreground: '#d4d4d4',
-        cursor: '#e94560',
-        cursorAccent: '#1a1a2e',
-        selectionBackground: '#3a3a5e',
-        black: '#1a1a2e',
-        red: '#f44747',
-        green: '#4ec9b0',
-        yellow: '#dcdcaa',
-        blue: '#569cd6',
-        magenta: '#c586c0',
-        cyan: '#9cdcfe',
-        white: '#d4d4d4',
-        brightBlack: '#6b7280',
-        brightRed: '#f44747',
-        brightGreen: '#4ec9b0',
-        brightYellow: '#dcdcaa',
-        brightBlue: '#569cd6',
-        brightMagenta: '#c586c0',
-        brightCyan: '#9cdcfe',
-        brightWhite: '#ffffff',
+        background: '#2b2a27',
+        foreground: '#e8dfd5',
+        cursor: '#d97757',
+        cursorAccent: '#2b2a27',
+        selectionBackground: '#4a4540',
+        black: '#2b2a27',
+        red: '#d95555',
+        green: '#7cba6a',
+        yellow: '#d4b87a',
+        blue: '#7aadca',
+        magenta: '#c97a9c',
+        cyan: '#88c8b8',
+        white: '#e8dfd5',
+        brightBlack: '#8c8478',
+        brightRed: '#e06666',
+        brightGreen: '#8ece7e',
+        brightYellow: '#e0c88e',
+        brightBlue: '#8ebdd0',
+        brightMagenta: '#d98eb0',
+        brightCyan: '#9ed0c4',
+        brightWhite: '#fff8f0',
       },
     });
 
@@ -422,6 +696,7 @@
 
     ws.onopen = () => {
       reconnectDelay = 1000;
+      updateConnectionStatus(true);
       if (activeSessionId) {
         attachSession(activeSessionId);
       }
@@ -502,6 +777,9 @@
             } catch {}
           }
           renderSidebar();
+          updateStatusBar();
+          updateBreadcrumb();
+          if (!activeSessionId) renderLandingRecent();
           break;
 
         case 'session-deleted':
@@ -516,18 +794,34 @@
             fileViewer.classList.add('hidden');
             document.getElementById('terminal-wrapper').style.display = '';
             document.getElementById('terminal-wrapper').style.inset = '0';
+            updateStatusBar();
+            updateBreadcrumb();
+            renderLandingRecent();
           }
           break;
 
         case 'exited':
           // Session still exists, just re-render sidebar to update status dot
           renderSidebar();
+          updateStatusBar();
           break;
 
         case 'session-idle': {
           const { sessionId, idle } = msg;
+          const wasWorking = sessionIdleState.get(sessionId) === false;
           sessionIdleState.set(sessionId, idle);
           updateStatusDot(sessionId, idle);
+          updateStatusBar();
+          // Auto-refresh file tree and git when Claude finishes working
+          if (idle && wasWorking && sessionId === activeSessionId) {
+            renderFileTreeDir(fileTreeEl, '', 0);
+            if (activeRightPanelTab === 'git') {
+              refreshGitStatus();
+            } else {
+              // Show notification dot on Git tab
+              setGitTabBadge(true);
+            }
+          }
           break;
         }
 
@@ -561,6 +855,7 @@
     };
 
     ws.onclose = () => {
+      updateConnectionStatus(false);
       const jitter = reconnectDelay * (0.5 + Math.random());
       setTimeout(connect, jitter);
       reconnectDelay = Math.min(reconnectDelay * 2, 30000);
@@ -621,6 +916,8 @@
 
     term.focus();
     renderSidebar();
+    updateStatusBar();
+    updateBreadcrumb();
   }
 
   function updateStatusDot(sessionId, idle) {
@@ -646,6 +943,8 @@
       // Project header
       const header = document.createElement('div');
       header.className = 'project-header';
+      // Initial for mini sidebar
+      header.dataset.initial = (proj.name || 'P').charAt(0).toUpperCase();
 
       const arrow = document.createElement('span');
       arrow.className = 'project-arrow';
@@ -674,6 +973,13 @@
       header.appendChild(del);
 
       header.onclick = () => {
+        // In mini mode, expand sidebar first
+        if (sidebarCollapsed) {
+          toggleMiniSidebar();
+          expandedProjects.add(proj.id);
+          renderSidebar();
+          return;
+        }
         if (expandedProjects.has(proj.id)) {
           expandedProjects.delete(proj.id);
         } else {
@@ -1345,11 +1651,13 @@
       row.className = 'file-tree-item';
       row.style.paddingLeft = (indent + 16) + 'px';
 
+      const icon = createFileIcon(file);
       const label = document.createElement('span');
       label.className = 'file-tree-label';
       label.textContent = file;
       label.title = filePath;
 
+      row.appendChild(icon);
       row.appendChild(label);
       row.onclick = () => openFileTab(filePath, file);
       container.appendChild(row);
@@ -1371,6 +1679,31 @@
       empty.textContent = 'Empty directory';
       container.appendChild(empty);
     }
+
+    // Re-apply git status badges after tree content updates
+    if (gitFileStatusMap.size > 0) applyFileTreeGitBadges();
+  }
+
+  function applyFileTreeGitBadges() {
+    // Annotate file tree items with git status badges
+    const items = fileTreeEl.querySelectorAll('.file-tree-item:not(.file-tree-folder)');
+    items.forEach(item => {
+      // Remove existing badge
+      const old = item.querySelector('.file-tree-git-badge');
+      if (old) old.remove();
+
+      const label = item.querySelector('.file-tree-label');
+      if (!label) return;
+      const path = label.title || label.textContent;
+      const status = gitFileStatusMap.get(path);
+      if (status) {
+        const badge = document.createElement('span');
+        badge.className = `file-tree-git-badge git-status-${status.toLowerCase()}`;
+        badge.textContent = status;
+        badge.title = STATUS_LABELS[status] || status;
+        item.appendChild(badge);
+      }
+    });
   }
 
   function initFileTree() {
@@ -1421,43 +1754,147 @@
     claudeTab.onclick = () => switchTab('claude');
     tabList.appendChild(claudeTab);
 
-    // File tabs
-    for (const tab of openTabs) {
+    // File tabs — render pinned first, then unpinned
+    const sortedTabs = [...openTabs].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+    // Reorder openTabs in-place to match sorted order
+    sortedTabs.forEach((t, idx) => { openTabs[idx] = t; });
+
+    for (let i = 0; i < openTabs.length; i++) {
+      const tab = openTabs[i];
       const el = document.createElement('div');
-      el.className = 'tab' + (activeTabId === tab.id ? ' active' : '');
+      el.className = 'tab' + (activeTabId === tab.id ? ' active' : '') + (tab.pinned ? ' tab-pinned' : '');
       el.title = tab.fullPath;
 
-      const label = document.createElement('span');
-      label.className = 'tab-label';
-      label.textContent = tab.filename;
+      // File type icon
+      const origName = tab.fullPath ? tab.fullPath.split('/').pop() : tab.filename;
+      const tabIcon = createFileIcon(origName, 'tab-icon');
+      el.appendChild(tabIcon);
 
-      const close = document.createElement('button');
-      close.className = 'tab-close';
-      close.textContent = '\u00D7';
-      close.onclick = (e) => {
-        e.stopPropagation();
-        closeTab(tab.id);
+      if (!tab.pinned) {
+        const label = document.createElement('span');
+        label.className = 'tab-label';
+        label.textContent = tab.filename;
+        el.appendChild(label);
+      }
+
+      // Diff stats badge (only for unpinned)
+      if (tab.diffStats && !tab.pinned) {
+        const stats = document.createElement('span');
+        stats.className = 'tab-diff-stats';
+        const parts = [];
+        if (tab.diffStats.added) parts.push(`<span class="tab-diff-add">+${tab.diffStats.added}</span>`);
+        if (tab.diffStats.removed) parts.push(`<span class="tab-diff-del">-${tab.diffStats.removed}</span>`);
+        if (parts.length) stats.innerHTML = parts.join(' ');
+        el.appendChild(stats);
+      }
+
+      // Close button (not for pinned tabs)
+      if (!tab.pinned) {
+        const close = document.createElement('button');
+        close.className = 'tab-close';
+        close.textContent = '\u00D7';
+        close.onclick = (e) => {
+          e.stopPropagation();
+          closeTab(tab.id);
+        };
+        el.appendChild(close);
+      }
+
+      el.onclick = () => switchTab(tab.id);
+      el.oncontextmenu = (e) => {
+        e.preventDefault();
+        showTabContextMenu(e, tab);
       };
 
-      el.appendChild(label);
-      el.appendChild(close);
-      el.onclick = () => switchTab(tab.id);
+      // Drag-and-drop reordering
+      el.draggable = true;
+      el.dataset.tabIndex = String(i);
+      el.ondragstart = (e) => {
+        e.dataTransfer.setData('text/plain', String(i));
+        el.classList.add('tab-dragging');
+      };
+      el.ondragend = () => {
+        el.classList.remove('tab-dragging');
+        tabList.querySelectorAll('.tab-drop-before, .tab-drop-after').forEach(t => {
+          t.classList.remove('tab-drop-before', 'tab-drop-after');
+        });
+      };
+      el.ondragover = (e) => {
+        e.preventDefault();
+        const rect = el.getBoundingClientRect();
+        const mid = rect.left + rect.width / 2;
+        el.classList.toggle('tab-drop-before', e.clientX < mid);
+        el.classList.toggle('tab-drop-after', e.clientX >= mid);
+      };
+      el.ondragleave = () => {
+        el.classList.remove('tab-drop-before', 'tab-drop-after');
+      };
+      el.ondrop = (e) => {
+        e.preventDefault();
+        el.classList.remove('tab-drop-before', 'tab-drop-after');
+        const fromIdx = parseInt(e.dataTransfer.getData('text/plain'));
+        const toIdx = parseInt(el.dataset.tabIndex);
+        if (isNaN(fromIdx) || isNaN(toIdx) || fromIdx === toIdx) return;
+        const moved = openTabs.splice(fromIdx, 1)[0];
+        openTabs.splice(toIdx > fromIdx ? toIdx : toIdx, 0, moved);
+        renderTabs();
+      };
+
       tabList.appendChild(el);
     }
+
+    // Update tab scroll arrows after render
+    requestAnimationFrame(updateTabScrollButtons);
+  }
+
+  function updateTabScrollButtons() {
+    if (!tabScrollLeft || !tabScrollRight) return;
+    const overflow = tabList.scrollWidth > tabList.clientWidth;
+    if (!overflow) {
+      tabScrollLeft.classList.add('hidden');
+      tabScrollRight.classList.add('hidden');
+      return;
+    }
+    tabScrollLeft.classList.toggle('hidden', tabList.scrollLeft <= 0);
+    tabScrollRight.classList.toggle('hidden',
+      tabList.scrollLeft + tabList.clientWidth >= tabList.scrollWidth - 1);
+  }
+
+  tabScrollLeft.onclick = () => {
+    tabList.scrollBy({ left: -120, behavior: 'smooth' });
+    setTimeout(updateTabScrollButtons, 300);
+  };
+  tabScrollRight.onclick = () => {
+    tabList.scrollBy({ left: 120, behavior: 'smooth' });
+    setTimeout(updateTabScrollButtons, 300);
+  };
+  tabList.addEventListener('scroll', debounce(updateTabScrollButtons, 100));
+
+  function getTopInset() {
+    const tabH = parseInt(getComputedStyle(document.documentElement).getPropertyValue('--tab-bar-height')) || 32;
+    const bcH = breadcrumbBar && !breadcrumbBar.classList.contains('hidden')
+      ? breadcrumbBar.offsetHeight : 0;
+    return (tabH + bcH) + 'px';
+  }
+
+  function getBottomInset() {
+    return statusBar && !statusBar.classList.contains('hidden') ? '24px' : '0';
   }
 
   function switchTab(tabId) {
     activeTabId = tabId;
     renderTabs();
+    closeFvSearch();
+    if (fileViewerEditing) exitEditMode(true);
 
     const termWrapper = document.getElementById('terminal-wrapper');
 
     if (tabId === 'claude') {
       // Show terminal, hide file viewer
       termWrapper.style.display = '';
-      const tabH = getComputedStyle(document.documentElement).getPropertyValue('--tab-bar-height') || '32px';
-      termWrapper.style.inset = tabH + ' 0 0 0';
+      termWrapper.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
       fileViewer.classList.add('hidden');
+      updateScrollToBottomBtn();
       term.focus();
       // Refit terminal synchronously so term.cols/rows are correct before
       // attachSession() sends the attach message with dimensions.
@@ -1467,6 +1904,8 @@
       // Show file viewer, hide terminal
       termWrapper.style.display = 'none';
       fileViewer.classList.remove('hidden');
+      fileViewer.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
+      scrollToBottomBtn.classList.add('hidden');
 
       const tab = openTabs.find(t => t.id === tabId);
       if (tab) {
@@ -1476,11 +1915,85 @@
   }
 
   function closeTab(tabId) {
+    const tab = openTabs.find(t => t.id === tabId);
+    if (tab && tab.pinned) return; // can't close pinned tabs
     openTabs = openTabs.filter(t => t.id !== tabId);
     if (activeTabId === tabId) {
       activeTabId = openTabs.length > 0 ? openTabs[openTabs.length - 1].id : 'claude';
     }
     switchTab(activeTabId);
+  }
+
+  function closeOtherTabs(tabId) {
+    openTabs = openTabs.filter(t => t.id === tabId);
+    activeTabId = tabId;
+    switchTab(activeTabId);
+  }
+
+  function closeAllTabs() {
+    const pinned = openTabs.filter(t => t.pinned);
+    openTabs = pinned;
+    if (!openTabs.find(t => t.id === activeTabId)) {
+      activeTabId = openTabs.length > 0 ? openTabs[0].id : 'claude';
+    }
+    switchTab(activeTabId);
+  }
+
+  function showTabContextMenu(e, tab) {
+    // Remove any existing context menu
+    const existing = document.getElementById('tab-context-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'tab-context-menu';
+    menu.className = 'context-menu';
+
+    const items = [
+      { label: tab.pinned ? 'Unpin' : 'Pin', action: () => { tab.pinned = !tab.pinned; renderTabs(); } },
+      { label: 'Close', action: () => closeTab(tab.id), disabled: tab.pinned },
+      { label: 'Close Others', action: () => closeOtherTabs(tab.id), disabled: openTabs.length <= 1 },
+      { label: 'Close All Unpinned', action: () => closeAllTabs() },
+      { type: 'separator' },
+      { label: 'Copy Path', action: () => { navigator.clipboard.writeText(tab.fullPath).catch(() => {}); showToast('Path copied', 'info', 2000); } },
+    ];
+
+    for (const item of items) {
+      if (item.type === 'separator') {
+        const sep = document.createElement('div');
+        sep.className = 'context-menu-sep';
+        menu.appendChild(sep);
+        continue;
+      }
+      const row = document.createElement('div');
+      row.className = 'context-menu-item';
+      if (item.disabled) row.classList.add('disabled');
+      row.textContent = item.label;
+      if (!item.disabled) {
+        row.onclick = () => { menu.remove(); item.action(); };
+      }
+      menu.appendChild(row);
+    }
+
+    menu.style.left = e.clientX + 'px';
+    menu.style.top = e.clientY + 'px';
+    document.body.appendChild(menu);
+
+    // Adjust if overflowing viewport
+    const rect = menu.getBoundingClientRect();
+    if (rect.right > window.innerWidth) menu.style.left = (window.innerWidth - rect.width - 4) + 'px';
+    if (rect.bottom > window.innerHeight) menu.style.top = (window.innerHeight - rect.height - 4) + 'px';
+
+    // Close on click outside or Escape
+    const cleanup = (ev) => {
+      if (!menu.contains(ev.target)) { menu.remove(); document.removeEventListener('mousedown', cleanup); document.removeEventListener('keydown', escCleanup); }
+    };
+    const escCleanup = (ev) => {
+      if (ev.key === 'Escape') { menu.remove(); document.removeEventListener('mousedown', cleanup); document.removeEventListener('keydown', escCleanup); }
+    };
+    setTimeout(() => {
+      document.addEventListener('mousedown', cleanup);
+      document.addEventListener('keydown', escCleanup);
+    }, 0);
   }
 
   const pendingFileOpens = new Set();
@@ -1544,8 +2057,138 @@
     }
   }
 
+  function renderFileViewerBreadcrumb(fullPath) {
+    fileViewerPath.innerHTML = '';
+    const parts = fullPath.split('/');
+    for (let i = 0; i < parts.length; i++) {
+      if (i > 0) {
+        const sep = document.createElement('span');
+        sep.className = 'fv-path-sep';
+        sep.textContent = '/';
+        fileViewerPath.appendChild(sep);
+      }
+      const segment = document.createElement('span');
+      segment.className = 'fv-path-segment';
+      segment.textContent = parts[i];
+      if (i < parts.length - 1) {
+        // Clicking a directory segment expands it in the file tree
+        const dirPath = parts.slice(0, i + 1).join('/');
+        segment.classList.add('fv-path-clickable');
+        segment.onclick = () => {
+          if (!expandedDirs.has(dirPath)) {
+            expandedDirs.add(dirPath);
+            renderFileTreeDir(fileTreeEl, '', 0);
+          }
+          // Switch to files tab if on git tab
+          if (activeRightPanelTab !== 'files') {
+            const filesTab = rightPanelTabs.querySelector('[data-rp-tab="files"]');
+            if (filesTab) filesTab.click();
+          }
+        };
+      }
+      fileViewerPath.appendChild(segment);
+    }
+  }
+
+  function renderUnifiedDiff(content) {
+    fileViewerContent.className = 'diff-view';
+    const lines = content.split('\n');
+    for (const line of lines) {
+      const lineEl = document.createElement('div');
+      lineEl.className = 'diff-line';
+      if (line.startsWith('+') && !line.startsWith('+++')) {
+        lineEl.classList.add('diff-add');
+      } else if (line.startsWith('-') && !line.startsWith('---')) {
+        lineEl.classList.add('diff-del');
+      } else if (line.startsWith('@@')) {
+        lineEl.classList.add('diff-hunk');
+      } else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
+        lineEl.classList.add('diff-header');
+      }
+      lineEl.textContent = line;
+      fileViewerContent.appendChild(lineEl);
+    }
+  }
+
+  function renderSplitDiff(content) {
+    fileViewerContent.className = 'diff-view diff-split';
+    const lines = content.split('\n');
+    const leftCol = document.createElement('div');
+    leftCol.className = 'diff-split-col diff-split-left';
+    const rightCol = document.createElement('div');
+    rightCol.className = 'diff-split-col diff-split-right';
+
+    for (const line of lines) {
+      if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
+        const lEl = document.createElement('div');
+        lEl.className = 'diff-line diff-header';
+        lEl.textContent = line;
+        leftCol.appendChild(lEl);
+        const rEl = document.createElement('div');
+        rEl.className = 'diff-line diff-header';
+        rEl.textContent = line;
+        rightCol.appendChild(rEl);
+      } else if (line.startsWith('@@')) {
+        const lEl = document.createElement('div');
+        lEl.className = 'diff-line diff-hunk';
+        lEl.textContent = line;
+        leftCol.appendChild(lEl);
+        const rEl = document.createElement('div');
+        rEl.className = 'diff-line diff-hunk';
+        rEl.textContent = line;
+        rightCol.appendChild(rEl);
+      } else if (line.startsWith('-') && !line.startsWith('---')) {
+        const lEl = document.createElement('div');
+        lEl.className = 'diff-line diff-del';
+        lEl.textContent = line.slice(1);
+        leftCol.appendChild(lEl);
+        const rEl = document.createElement('div');
+        rEl.className = 'diff-line diff-empty';
+        rEl.textContent = '\u00A0';
+        rightCol.appendChild(rEl);
+      } else if (line.startsWith('+') && !line.startsWith('+++')) {
+        const lEl = document.createElement('div');
+        lEl.className = 'diff-line diff-empty';
+        lEl.textContent = '\u00A0';
+        leftCol.appendChild(lEl);
+        const rEl = document.createElement('div');
+        rEl.className = 'diff-line diff-add';
+        rEl.textContent = line.slice(1);
+        rightCol.appendChild(rEl);
+      } else {
+        const text = line.startsWith(' ') ? line.slice(1) : line;
+        const lEl = document.createElement('div');
+        lEl.className = 'diff-line';
+        lEl.textContent = text;
+        leftCol.appendChild(lEl);
+        const rEl = document.createElement('div');
+        rEl.className = 'diff-line';
+        rEl.textContent = text;
+        rightCol.appendChild(rEl);
+      }
+    }
+
+    fileViewerContent.appendChild(leftCol);
+    fileViewerContent.appendChild(rightCol);
+  }
+
+  // Split diff toggle
+  fileViewerSplit.onclick = () => {
+    diffSplitMode = !diffSplitMode;
+    fileViewerSplit.classList.toggle('fv-btn-active', diffSplitMode);
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (tab && tab.type === 'diff') {
+      fileViewerContent.innerHTML = '';
+      if (diffSplitMode) {
+        renderSplitDiff(tab.content);
+      } else {
+        renderUnifiedDiff(tab.content);
+      }
+    }
+  };
+
   function renderFileContent(tab) {
-    fileViewerPath.textContent = tab.fullPath;
+    renderFileViewerBreadcrumb(tab.fullPath);
     fileViewerContent.innerHTML = '';
     fileViewerContent.className = '';
 
@@ -1563,37 +2206,52 @@
     }
 
     if (tab.type === 'diff') {
-      fileViewerContent.className = 'diff-view';
-      const lines = tab.content.split('\n');
-      for (const line of lines) {
-        const lineEl = document.createElement('div');
-        lineEl.className = 'diff-line';
-        if (line.startsWith('+') && !line.startsWith('+++')) {
-          lineEl.classList.add('diff-add');
-        } else if (line.startsWith('-') && !line.startsWith('---')) {
-          lineEl.classList.add('diff-del');
-        } else if (line.startsWith('@@')) {
-          lineEl.classList.add('diff-hunk');
-        } else if (line.startsWith('diff ') || line.startsWith('index ') || line.startsWith('---') || line.startsWith('+++')) {
-          lineEl.classList.add('diff-header');
-        }
-        lineEl.textContent = line;
-        fileViewerContent.appendChild(lineEl);
+      fileViewerSplit.classList.remove('hidden');
+      if (diffSplitMode) {
+        renderSplitDiff(tab.content);
+      } else {
+        renderUnifiedDiff(tab.content);
       }
       return;
     }
+    fileViewerSplit.classList.add('hidden');
 
     // Plain text with line numbers
     fileViewerContent.className = 'plain-text';
     const lines = tab.content.split('\n');
-    const gutter = document.createElement('div');
-    gutter.className = 'line-numbers';
-    gutter.textContent = lines.map((_, i) => i + 1).join('\n');
-    const code = document.createElement('div');
-    code.className = 'line-content';
-    code.textContent = tab.content;
-    fileViewerContent.appendChild(gutter);
-    fileViewerContent.appendChild(code);
+    const table = document.createElement('div');
+    table.className = 'line-table';
+    for (let i = 0; i < lines.length; i++) {
+      const row = document.createElement('div');
+      row.className = 'line-row';
+      row.dataset.lineNum = i + 1;
+      const num = document.createElement('span');
+      num.className = 'line-num';
+      num.textContent = i + 1;
+      num.onclick = () => highlightLine(row);
+      const text = document.createElement('span');
+      text.className = 'line-text';
+      text.textContent = lines[i];
+      row.appendChild(num);
+      row.appendChild(text);
+      table.appendChild(row);
+    }
+    fileViewerContent.appendChild(table);
+  }
+
+  function highlightLine(rowEl) {
+    // Clear previous highlight
+    const prev = fileViewerContent.querySelector('.line-row.line-highlighted');
+    if (prev) prev.classList.remove('line-highlighted');
+    rowEl.classList.add('line-highlighted');
+  }
+
+  function goToLine(lineNum) {
+    const row = fileViewerContent.querySelector(`.line-row[data-line-num="${lineNum}"]`);
+    if (row) {
+      highlightLine(row);
+      row.scrollIntoView({ block: 'center' });
+    }
   }
 
   // Refresh button handler
@@ -1627,11 +2285,272 @@
     renderFileContent(tab);
   };
 
+  // Word wrap toggle
+  fileViewerWrap.onclick = () => {
+    fileViewerWordWrap = !fileViewerWordWrap;
+    fileViewerWrap.classList.toggle('fv-btn-active', fileViewerWordWrap);
+    fileViewerContent.classList.toggle('word-wrap', fileViewerWordWrap);
+  };
+
+  // Copy file content
+  fileViewerCopy.onclick = () => {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || !tab.content) return;
+    navigator.clipboard.writeText(tab.content).then(
+      () => showToast('Copied to clipboard', 'info', 2000),
+      () => showToast('Failed to copy', 'error', 2000)
+    );
+  };
+
+  // --- Inline file editing ---
+
+  function enterEditMode() {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || !tab.content || tab.type === 'binary' || tab.type === 'diff') return;
+
+    fileViewerEditing = true;
+    fileViewerEdit.classList.add('hidden');
+    fileViewerSave.classList.remove('hidden');
+    fileViewerCancelEdit.classList.remove('hidden');
+
+    // Replace content with textarea
+    fileViewerContent.innerHTML = '';
+    fileViewerContent.className = 'editing';
+    const textarea = document.createElement('textarea');
+    textarea.id = 'fv-editor';
+    textarea.className = 'fv-editor';
+    textarea.value = tab.content;
+    textarea.spellcheck = false;
+    fileViewerContent.appendChild(textarea);
+    textarea.focus();
+  }
+
+  function exitEditMode(restoreContent) {
+    fileViewerEditing = false;
+    fileViewerEdit.classList.remove('hidden');
+    fileViewerSave.classList.add('hidden');
+    fileViewerCancelEdit.classList.add('hidden');
+
+    if (restoreContent) {
+      const tab = openTabs.find(t => t.id === activeTabId);
+      if (tab) renderFileContent(tab);
+    }
+  }
+
+  fileViewerEdit.onclick = enterEditMode;
+  fileViewerCancelEdit.onclick = () => exitEditMode(true);
+
+  fileViewerSave.onclick = async () => {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab) return;
+
+    const editor = document.getElementById('fv-editor');
+    if (!editor) return;
+
+    const newContent = editor.value;
+    fileViewerSave.disabled = true;
+    fileViewerSave.textContent = 'Saving\u2026';
+
+    try {
+      const res = await fetch('/api/file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          sessionId: activeSessionId,
+          path: tab.fullPath,
+          content: newContent,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        showToast(err.error || 'Failed to save file', 'error');
+        return;
+      }
+
+      // Update tab content and exit edit mode
+      tab.content = newContent;
+      showToast('File saved', 'success', 2000);
+      exitEditMode(true);
+    } catch {
+      showToast('Network error saving file', 'error');
+    } finally {
+      fileViewerSave.disabled = false;
+      fileViewerSave.textContent = 'Save';
+    }
+  };
+
+  // --- File viewer search ---
+
+  function openFvSearch() {
+    if (activeTabId === 'claude') return; // only for file tabs
+    fvSearchBar.classList.remove('hidden');
+    fvSearchInput.focus();
+    fvSearchInput.select();
+  }
+
+  function closeFvSearch() {
+    fvSearchBar.classList.add('hidden');
+    fvSearchInput.value = '';
+    clearFvSearchHighlights();
+    fvSearchCount.textContent = '';
+    fvSearchMatches = [];
+    fvSearchCurrentIdx = -1;
+  }
+
+  function performFvSearch(query) {
+    clearFvSearchHighlights();
+    fvSearchMatches = [];
+    fvSearchCurrentIdx = -1;
+    if (!query) {
+      fvSearchCount.textContent = '';
+      return;
+    }
+
+    const lowerQuery = query.toLowerCase();
+    // Walk text nodes in fileViewerContent and highlight matches
+    const walker = document.createTreeWalker(fileViewerContent, NodeFilter.SHOW_TEXT, null);
+    const textNodes = [];
+    while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+    for (const node of textNodes) {
+      const text = node.textContent;
+      const lower = text.toLowerCase();
+      let idx = 0;
+      const parts = [];
+      let lastEnd = 0;
+
+      while ((idx = lower.indexOf(lowerQuery, idx)) !== -1) {
+        if (idx > lastEnd) {
+          parts.push({ text: text.slice(lastEnd, idx), match: false });
+        }
+        parts.push({ text: text.slice(idx, idx + query.length), match: true });
+        lastEnd = idx + query.length;
+        idx = lastEnd;
+      }
+
+      if (parts.length > 0) {
+        if (lastEnd < text.length) {
+          parts.push({ text: text.slice(lastEnd), match: false });
+        }
+        const frag = document.createDocumentFragment();
+        for (const p of parts) {
+          if (p.match) {
+            const mark = document.createElement('mark');
+            mark.className = 'fv-search-match';
+            mark.textContent = p.text;
+            fvSearchMatches.push(mark);
+            frag.appendChild(mark);
+          } else {
+            frag.appendChild(document.createTextNode(p.text));
+          }
+        }
+        node.parentNode.replaceChild(frag, node);
+      }
+    }
+
+    if (fvSearchMatches.length > 0) {
+      fvSearchCurrentIdx = 0;
+      fvSearchMatches[0].classList.add('fv-search-current');
+      fvSearchMatches[0].scrollIntoView({ block: 'center' });
+      fvSearchCount.textContent = `1 of ${fvSearchMatches.length}`;
+    } else {
+      fvSearchCount.textContent = 'No results';
+    }
+  }
+
+  function clearFvSearchHighlights() {
+    const marks = fileViewerContent.querySelectorAll('mark.fv-search-match');
+    marks.forEach(mark => {
+      const parent = mark.parentNode;
+      parent.replaceChild(document.createTextNode(mark.textContent), mark);
+      parent.normalize(); // merge adjacent text nodes
+    });
+    fvSearchMatches = [];
+    fvSearchCurrentIdx = -1;
+  }
+
+  function navigateFvSearch(delta) {
+    if (fvSearchMatches.length === 0) return;
+    fvSearchMatches[fvSearchCurrentIdx].classList.remove('fv-search-current');
+    fvSearchCurrentIdx = (fvSearchCurrentIdx + delta + fvSearchMatches.length) % fvSearchMatches.length;
+    fvSearchMatches[fvSearchCurrentIdx].classList.add('fv-search-current');
+    fvSearchMatches[fvSearchCurrentIdx].scrollIntoView({ block: 'center' });
+    fvSearchCount.textContent = `${fvSearchCurrentIdx + 1} of ${fvSearchMatches.length}`;
+  }
+
+  fvSearchInput.oninput = debounce(() => {
+    performFvSearch(fvSearchInput.value.trim());
+  }, 200);
+
+  fvSearchInput.onkeydown = (e) => {
+    if (e.key === 'Escape') { closeFvSearch(); return; }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      navigateFvSearch(e.shiftKey ? -1 : 1);
+    }
+  };
+
+  fvSearchNext.onclick = () => navigateFvSearch(1);
+  fvSearchPrev.onclick = () => navigateFvSearch(-1);
+  fvSearchClose.onclick = closeFvSearch;
+
+  // --- Go to line ---
+  function openGoToLine() {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || !tab.content) return;
+    const totalLines = tab.content.split('\n').length;
+
+    const overlay = document.createElement('div');
+    overlay.className = 'goto-overlay';
+    const box = document.createElement('div');
+    box.className = 'goto-box';
+    const label = document.createElement('label');
+    label.textContent = `Go to line (1\u2013${totalLines}):`;
+    label.className = 'goto-label';
+    const input = document.createElement('input');
+    input.type = 'number';
+    input.min = 1;
+    input.max = totalLines;
+    input.className = 'goto-input';
+    input.placeholder = 'Line number';
+    box.appendChild(label);
+    box.appendChild(input);
+    overlay.appendChild(box);
+    document.body.appendChild(overlay);
+    input.focus();
+
+    const cleanup = () => overlay.remove();
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') {
+        const num = parseInt(input.value);
+        if (num >= 1 && num <= totalLines) goToLine(num);
+        cleanup();
+      }
+      if (e.key === 'Escape') cleanup();
+    };
+    overlay.onclick = (e) => { if (e.target === overlay) cleanup(); };
+  }
+
   // Keyboard shortcuts (only when terminal is NOT focused)
   document.addEventListener('keydown', (e) => {
     const inTerminal = terminalEl.contains(document.activeElement) ||
                        shellTerminalEl.contains(document.activeElement);
     if (inTerminal) return;
+
+    // Ctrl+F — open file viewer search (only when viewing a file)
+    if (e.key === 'f' && (e.ctrlKey || e.metaKey) && activeTabId !== 'claude') {
+      e.preventDefault();
+      openFvSearch();
+      return;
+    }
+
+    // Ctrl+G — go to line (only when viewing a file)
+    if (e.key === 'g' && (e.ctrlKey || e.metaKey) && activeTabId !== 'claude') {
+      e.preventDefault();
+      openGoToLine();
+      return;
+    }
 
     if (e.altKey && e.key === 'Tab') {
       e.preventDefault();
@@ -1658,16 +2577,20 @@
     if (tab === activeRightPanelTab) return;
     activeRightPanelTab = tab;
     rightPanelTabs.querySelectorAll('.rp-tab').forEach(b => b.classList.toggle('active', b.dataset.rpTab === tab));
+    const searchBox = document.querySelector('.file-tree-search');
     if (tab === 'files') {
       fileTreeEl.classList.remove('hidden');
       gitPanel.classList.add('hidden');
       btnRefreshFileTree.style.display = '';
       btnToggleFileTree.style.display = '';
+      if (searchBox) searchBox.style.display = '';
     } else {
       fileTreeEl.classList.add('hidden');
       gitPanel.classList.remove('hidden');
       btnRefreshFileTree.style.display = 'none';
       btnToggleFileTree.style.display = 'none';
+      if (searchBox) searchBox.style.display = 'none';
+      setGitTabBadge(false);
       refreshGitStatus();
     }
   });
@@ -1706,6 +2629,19 @@
     if (data.ahead > 0) parts.push(`+${data.ahead}`);
     if (data.behind > 0) parts.push(`-${data.behind}`);
     gitAheadBehind.textContent = parts.join(' ');
+
+    // Build file status map for tree change indicators
+    gitFileStatusMap = new Map();
+    for (const f of data.staged) gitFileStatusMap.set(f.path, f.status);
+    for (const f of data.unstaged) {
+      if (!gitFileStatusMap.has(f.path)) gitFileStatusMap.set(f.path, f.status);
+    }
+    for (const f of data.untracked) gitFileStatusMap.set(f, '?');
+    // Update file tree badges
+    applyFileTreeGitBadges();
+
+    // Update status bar changes counter
+    updateStatusChangesCount(data);
 
     // Enable/disable commit button based on staged files
     btnGitCommit.disabled = data.staged.length === 0;
@@ -2086,6 +3022,15 @@
     }
   }
 
+  function countDiffStats(diff) {
+    let added = 0, removed = 0;
+    for (const line of diff.split('\n')) {
+      if (line.startsWith('+') && !line.startsWith('+++')) added++;
+      else if (line.startsWith('-') && !line.startsWith('---')) removed++;
+    }
+    return { added, removed };
+  }
+
   function openDiffTab(filePath, diff, staged) {
     const tabId = `diff:${staged ? 'staged' : 'unstaged'}:${filePath}`;
     const filename = filePath.split('/').pop();
@@ -2094,12 +3039,14 @@
     // Remove existing diff tab for the same file/mode
     openTabs = openTabs.filter(t => t.id !== tabId);
 
+    const stats = countDiffStats(diff);
     const tab = {
       id: tabId,
       filename: tabTitle,
       fullPath: filePath,
       content: diff,
       type: 'diff',
+      diffStats: stats,
     };
     openTabs.push(tab);
     switchTab(tab.id);
@@ -2223,8 +3170,6 @@
 
   // --- Sidebar Divider Drag ---
 
-  const sidebar = document.getElementById('sidebar');
-  const sidebarDivider = document.getElementById('sidebar-divider');
   let isSidebarDragging = false;
   let sidebarRafPending = false;
 
@@ -2289,8 +3234,791 @@
     }, 200);
   });
 
+  // --- Session controls (status bar buttons) ---
+
+  statusInterrupt.onclick = () => {
+    if (!activeSessionId) return;
+    wsSend(JSON.stringify({ type: 'input', sessionId: activeSessionId, data: '\x03' }));
+    term.focus();
+  };
+
+  statusCompact.onclick = () => {
+    if (!activeSessionId) return;
+    wsSend(JSON.stringify({ type: 'input', sessionId: activeSessionId, data: '/compact\r' }));
+    term.focus();
+  };
+
+  // --- File tree filter ---
+
+  fileTreeFilter.oninput = debounce(() => {
+    const query = fileTreeFilter.value.trim().toLowerCase();
+    filterFileTree(fileTreeEl, query);
+  }, 150);
+
+  function filterFileTree(container, query) {
+    if (!query) {
+      // Clear all filter states
+      const items = container.querySelectorAll('.file-tree-item');
+      items.forEach(el => el.classList.remove('filter-hidden'));
+      // Remove highlights
+      container.querySelectorAll('.file-tree-highlight').forEach(hl => {
+        hl.replaceWith(document.createTextNode(hl.textContent));
+      });
+      // Collapse all children containers that were force-expanded
+      container.querySelectorAll('.file-tree-children.filter-expanded').forEach(ch => {
+        ch.classList.remove('filter-expanded');
+        if (!expandedDirs.has(ch.parentElement && ch.parentElement.dataset && ch.parentElement.dataset.dirPath)) {
+          // Only collapse if not user-expanded
+        }
+      });
+      return;
+    }
+
+    const allItems = container.querySelectorAll('.file-tree-item');
+    const matchedParents = new Set();
+
+    // First pass: find matching file items and mark them
+    allItems.forEach(item => {
+      const label = item.querySelector('.file-tree-label');
+      if (!label) return;
+      const text = label.textContent.toLowerCase();
+      const isFolder = item.classList.contains('file-tree-folder');
+
+      if (text.includes(query)) {
+        item.classList.remove('filter-hidden');
+        // Highlight match
+        highlightMatch(label, query);
+        // Mark all ancestor folders as visible
+        let parent = item.parentElement;
+        while (parent && parent !== container) {
+          if (parent.classList.contains('file-tree-children')) {
+            parent.classList.add('expanded', 'filter-expanded');
+            matchedParents.add(parent);
+          }
+          parent = parent.parentElement;
+        }
+      } else if (!isFolder) {
+        item.classList.add('filter-hidden');
+        clearHighlight(label);
+      }
+    });
+
+    // Second pass: show folders that have visible children, hide empty ones
+    allItems.forEach(item => {
+      if (!item.classList.contains('file-tree-folder')) return;
+      const label = item.querySelector('.file-tree-label');
+      const sibling = item.parentElement && item.parentElement.querySelector('.file-tree-children');
+      if (sibling && matchedParents.has(sibling)) {
+        item.classList.remove('filter-hidden');
+      } else if (label && label.textContent.toLowerCase().includes(query)) {
+        item.classList.remove('filter-hidden');
+      } else {
+        item.classList.add('filter-hidden');
+      }
+      if (label) {
+        if (label.textContent.toLowerCase().includes(query)) {
+          highlightMatch(label, query);
+        } else {
+          clearHighlight(label);
+        }
+      }
+    });
+  }
+
+  function highlightMatch(label, query) {
+    // Remove existing highlights first
+    clearHighlight(label);
+    const text = label.textContent;
+    const lower = text.toLowerCase();
+    const idx = lower.indexOf(query);
+    if (idx === -1) return;
+
+    const before = document.createTextNode(text.slice(0, idx));
+    const match = document.createElement('span');
+    match.className = 'file-tree-highlight';
+    match.textContent = text.slice(idx, idx + query.length);
+    const after = document.createTextNode(text.slice(idx + query.length));
+
+    label.textContent = '';
+    label.appendChild(before);
+    label.appendChild(match);
+    label.appendChild(after);
+  }
+
+  function clearHighlight(label) {
+    const highlights = label.querySelectorAll('.file-tree-highlight');
+    if (highlights.length === 0) return;
+    const text = label.textContent;
+    label.textContent = text;
+  }
+
+  // --- Keyboard shortcuts overlay ---
+
+  function openShortcuts() {
+    shortcutsOverlay.classList.remove('hidden');
+  }
+
+  function closeShortcuts() {
+    shortcutsOverlay.classList.add('hidden');
+  }
+
+  document.getElementById('btn-close-shortcuts').onclick = closeShortcuts;
+
+  shortcutsOverlay.onclick = (e) => {
+    if (e.target === shortcutsOverlay) closeShortcuts();
+  };
+
+  // Extend keyboard handler: ? shows shortcuts, Ctrl+K opens palette, Esc closes
+  document.addEventListener('keydown', (e) => {
+    // Ctrl+B — toggle mini sidebar
+    if (e.key === 'b' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      toggleMiniSidebar();
+      return;
+    }
+
+    // Ctrl+\ — toggle focus mode
+    if (e.key === '\\' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      toggleFocusMode();
+      return;
+    }
+
+    // Ctrl+= / Ctrl+- / Ctrl+0 — font size zoom
+    if ((e.ctrlKey || e.metaKey) && (e.key === '=' || e.key === '+')) {
+      e.preventDefault();
+      setTermFontSize(termFontSize + 1);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === '-') {
+      e.preventDefault();
+      setTermFontSize(termFontSize - 1);
+      return;
+    }
+    if ((e.ctrlKey || e.metaKey) && e.key === '0') {
+      e.preventDefault();
+      setTermFontSize(DEFAULT_FONT_SIZE);
+      return;
+    }
+
+    // Ctrl+K — command palette (works from anywhere)
+    if (e.key === 'k' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (cpOverlay.classList.contains('hidden')) {
+        openCommandPalette();
+      } else {
+        closeCommandPalette();
+      }
+      return;
+    }
+
+    // Esc — close overlays
+    if (e.key === 'Escape') {
+      if (!cpOverlay.classList.contains('hidden')) {
+        closeCommandPalette();
+        e.stopPropagation();
+        return;
+      }
+      if (!shortcutsOverlay.classList.contains('hidden')) {
+        closeShortcuts();
+        e.stopPropagation();
+        return;
+      }
+    }
+
+    // Don't trigger shortcuts when typing in inputs or terminals
+    const tag = e.target.tagName;
+    const inInput = tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT';
+    const inTerminal = terminalEl.contains(document.activeElement) ||
+                       shellTerminalEl.contains(document.activeElement);
+
+    if (e.key === '?' && !inInput && !inTerminal) {
+      e.preventDefault();
+      openShortcuts();
+    }
+  });
+
+  // --- Command palette ---
+
+  function openCommandPalette() {
+    cpInput.value = '';
+    cpSelectedIndex = -1;
+    cpOverlay.classList.remove('hidden');
+    cpInput.focus();
+    renderCommandPaletteResults('');
+  }
+
+  function closeCommandPalette() {
+    cpOverlay.classList.add('hidden');
+  }
+
+  cpOverlay.onclick = (e) => {
+    if (e.target === cpOverlay) closeCommandPalette();
+  };
+
+  function getCommandPaletteItems(query) {
+    const items = [];
+    const q = query.toLowerCase();
+
+    // Quick actions (always available)
+    const actions = [
+      { icon: '\u25B6', label: 'New Project', meta: 'action', action: () => { closeCommandPalette(); openModal(); } },
+    ];
+    if (activeSessionId) {
+      actions.push(
+        { icon: '\u2717', label: 'Interrupt Claude', meta: 'Ctrl+C', action: () => { closeCommandPalette(); statusInterrupt.click(); } },
+        { icon: '\u21BB', label: 'Compact Context', meta: '/compact', action: () => { closeCommandPalette(); statusCompact.click(); } },
+        { icon: '\u21BB', label: 'Refresh File Tree', meta: 'action', action: () => { closeCommandPalette(); renderFileTreeDir(fileTreeEl, '', 0); } },
+        { icon: '\u21BB', label: 'Refresh Git Status', meta: 'action', action: () => { closeCommandPalette(); refreshGitStatus(); } },
+        { icon: '\u25A3', label: 'Toggle Sidebar', meta: 'Ctrl+B', action: () => { closeCommandPalette(); toggleMiniSidebar(); } },
+        { icon: '\u25A3', label: 'Toggle Focus Mode', meta: 'Ctrl+\\', action: () => { closeCommandPalette(); toggleFocusMode(); } },
+        { icon: '\u2717', label: 'Close All Tabs', meta: 'action', action: () => { closeCommandPalette(); closeAllTabs(); } },
+      );
+    }
+
+    // Sessions
+    const sessionItems = sessions.map(s => {
+      const project = projects.find(p => p.id === s.projectId);
+      return {
+        icon: s.alive ? '\u25CF' : '\u25CB',
+        label: (project ? project.name + ' / ' : '') + (s.name || 'Untitled'),
+        meta: s.alive ? 'running' : 'exited',
+        action: () => { closeCommandPalette(); attachSession(s.id); },
+        group: 'sessions',
+      };
+    });
+
+    // Files from open tabs
+    const fileItems = openTabs.map(t => ({
+      icon: '\u2610',
+      label: t.filename,
+      meta: t.fullPath,
+      action: () => { closeCommandPalette(); switchTab(t.id); },
+      group: 'files',
+    }));
+
+    // Collect file tree entries recursively
+    const treeFiles = [];
+    function collectTreeFiles(container) {
+      const labels = container.querySelectorAll('.file-tree-item:not(.file-tree-folder) .file-tree-label');
+      labels.forEach(label => {
+        const path = label.title || label.textContent;
+        const name = label.textContent;
+        treeFiles.push({
+          icon: '\u2610',
+          label: name,
+          meta: path,
+          action: () => { closeCommandPalette(); openFileTab(path, name); },
+          group: 'files',
+        });
+      });
+    }
+    collectTreeFiles(fileTreeEl);
+
+    // Merge file items (open tabs + tree, deduped)
+    const seenPaths = new Set(fileItems.map(f => f.meta));
+    const allFiles = [...fileItems];
+    for (const tf of treeFiles) {
+      if (!seenPaths.has(tf.meta)) {
+        allFiles.push(tf);
+        seenPaths.add(tf.meta);
+      }
+    }
+
+    // Filter
+    const filtered = { actions: [], sessions: [], files: [] };
+
+    for (const a of actions) {
+      if (!q || a.label.toLowerCase().includes(q)) {
+        filtered.actions.push(a);
+      }
+    }
+    for (const s of sessionItems) {
+      if (!q || s.label.toLowerCase().includes(q)) {
+        filtered.sessions.push(s);
+      }
+    }
+    for (const f of allFiles) {
+      if (!q || f.label.toLowerCase().includes(q) || f.meta.toLowerCase().includes(q)) {
+        filtered.files.push(f);
+      }
+    }
+
+    // Limit files to 15
+    filtered.files = filtered.files.slice(0, 15);
+
+    return filtered;
+  }
+
+  function renderCommandPaletteResults(query) {
+    const filtered = getCommandPaletteItems(query);
+    cpResults.innerHTML = '';
+
+    const allItems = [];
+
+    function addGroup(label, items) {
+      if (items.length === 0) return;
+      const groupLabel = document.createElement('div');
+      groupLabel.className = 'cp-group-label';
+      groupLabel.textContent = label;
+      cpResults.appendChild(groupLabel);
+
+      for (const item of items) {
+        const el = document.createElement('div');
+        el.className = 'cp-item';
+        el.dataset.cpIndex = allItems.length;
+
+        const icon = document.createElement('span');
+        icon.className = 'cp-item-icon';
+        icon.textContent = item.icon;
+
+        const lbl = document.createElement('span');
+        lbl.className = 'cp-item-label';
+        // Highlight matching text
+        if (query) {
+          const idx = item.label.toLowerCase().indexOf(query.toLowerCase());
+          if (idx >= 0) {
+            lbl.innerHTML = escapeHtml(item.label.slice(0, idx)) +
+              '<span class="cp-item-highlight">' + escapeHtml(item.label.slice(idx, idx + query.length)) + '</span>' +
+              escapeHtml(item.label.slice(idx + query.length));
+          } else {
+            lbl.textContent = item.label;
+          }
+        } else {
+          lbl.textContent = item.label;
+        }
+
+        const meta = document.createElement('span');
+        meta.className = 'cp-item-meta';
+        meta.textContent = item.meta;
+
+        el.appendChild(icon);
+        el.appendChild(lbl);
+        el.appendChild(meta);
+
+        el.onclick = () => item.action();
+        el.onmouseenter = () => {
+          cpSelectedIndex = parseInt(el.dataset.cpIndex);
+          updateCpSelection();
+        };
+
+        cpResults.appendChild(el);
+        allItems.push({ el, action: item.action });
+      }
+    }
+
+    addGroup('Actions', filtered.actions);
+    addGroup('Sessions', filtered.sessions);
+    addGroup('Files', filtered.files);
+
+    if (allItems.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'cp-empty';
+      empty.textContent = 'No results found';
+      cpResults.appendChild(empty);
+    }
+
+    // Store for keyboard nav
+    cpResults._items = allItems;
+    cpSelectedIndex = allItems.length > 0 ? 0 : -1;
+    updateCpSelection();
+  }
+
+  function escapeHtml(str) {
+    return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  }
+
+  function updateCpSelection() {
+    const items = cpResults._items || [];
+    items.forEach((item, i) => {
+      item.el.classList.toggle('cp-selected', i === cpSelectedIndex);
+    });
+    // Scroll selected into view
+    if (cpSelectedIndex >= 0 && items[cpSelectedIndex]) {
+      items[cpSelectedIndex].el.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  cpInput.oninput = () => {
+    renderCommandPaletteResults(cpInput.value.trim());
+  };
+
+  cpInput.onkeydown = (e) => {
+    const items = cpResults._items || [];
+    if (e.key === 'ArrowDown') {
+      e.preventDefault();
+      if (items.length > 0) {
+        cpSelectedIndex = (cpSelectedIndex + 1) % items.length;
+        updateCpSelection();
+      }
+    } else if (e.key === 'ArrowUp') {
+      e.preventDefault();
+      if (items.length > 0) {
+        cpSelectedIndex = (cpSelectedIndex - 1 + items.length) % items.length;
+        updateCpSelection();
+      }
+    } else if (e.key === 'Enter') {
+      e.preventDefault();
+      if (cpSelectedIndex >= 0 && items[cpSelectedIndex]) {
+        items[cpSelectedIndex].action();
+      }
+    } else if (e.key === 'Escape') {
+      closeCommandPalette();
+    }
+  };
+
+  // --- Scroll-to-bottom button ---
+
+  function updateScrollToBottomBtn() {
+    if (!activeSessionId || !term || activeTabId !== 'claude') {
+      scrollToBottomBtn.classList.add('hidden');
+      return;
+    }
+    if (isNearBottom(term)) {
+      scrollToBottomBtn.classList.add('hidden');
+    } else {
+      scrollToBottomBtn.classList.remove('hidden');
+    }
+  }
+
+  scrollToBottomBtn.onclick = () => {
+    if (term) {
+      term.scrollToBottom();
+      claudeSticky = true;
+      scrollToBottomBtn.classList.add('hidden');
+      term.focus();
+    }
+  };
+
+  // --- Live sidebar times ---
+
+  function startSidebarTimeUpdates() {
+    if (sidebarTimeTimer) return;
+    sidebarTimeTimer = setInterval(() => {
+      const timeEls = document.querySelectorAll('.session-time');
+      timeEls.forEach(el => {
+        const li = el.closest('li[data-session-id]');
+        if (!li) return;
+        const s = sessions.find(sess => sess.id === li.dataset.sessionId);
+        if (s) el.textContent = relativeTime(s.createdAt);
+      });
+    }, 30000);
+  }
+
+  // --- Connection status indicator ---
+
+  let wasConnected = false;
+
+  function updateConnectionStatus(connected) {
+    if (!statusConnection) return;
+    if (connected) {
+      statusConnection.innerHTML = '<span class="status-connection-dot connected"></span> Connected';
+      // Show reconnect toast only if we were previously connected (not initial)
+      if (wasConnected === false && wasConnected !== undefined) {
+        // wasConnected starts as false; skip the very first connect
+      }
+      if (wasConnected === 'disconnected') {
+        showToast('Connection restored', 'success', 3000);
+      }
+      wasConnected = true;
+    } else {
+      statusConnection.innerHTML = '<span class="status-connection-dot disconnected"></span> Reconnecting\u2026';
+      if (wasConnected === true) {
+        showToast('Connection lost \u2014 reconnecting\u2026', 'warning', 5000);
+      }
+      wasConnected = 'disconnected';
+    }
+  }
+
+  // --- Restart button ---
+
+  statusRestart.onclick = async () => {
+    if (!activeSessionId) return;
+    statusRestart.disabled = true;
+    statusRestart.textContent = 'Restarting\u2026';
+    await restartSession(activeSessionId);
+    statusRestart.disabled = false;
+    statusRestart.textContent = 'Restart';
+  };
+
+  // --- Session info popover ---
+
+  statusCopyCli.onclick = (e) => {
+    e.stopPropagation();
+    toggleSessionInfoPopover();
+  };
+
+  function toggleSessionInfoPopover() {
+    const existing = document.getElementById('session-info-popover');
+    if (existing) { existing.remove(); return; }
+
+    if (!activeSessionId) return;
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session) return;
+    const project = projects.find(p => p.id === session.projectId);
+
+    const popover = document.createElement('div');
+    popover.id = 'session-info-popover';
+    popover.className = 'session-info-popover';
+
+    const resumeId = session.claudeSessionId;
+    const cliCmd = session.provider === 'codex'
+      ? (resumeId ? `codex --resume ${resumeId}` : 'codex')
+      : (resumeId ? `claude --resume ${resumeId}` : 'claude');
+    const fullCmd = project ? `${cliCmd} --cwd ${project.cwd}` : cliCmd;
+
+    const rows = [
+      { label: 'Session', value: session.name || 'Untitled' },
+      { label: 'Project', value: project ? project.name : 'Unknown' },
+      { label: 'Branch', value: session.branchName || 'none' },
+      { label: 'Worktree', value: session.worktreePath || 'N/A' },
+      { label: 'Created', value: new Date(session.createdAt).toLocaleString() },
+      { label: 'Status', value: session.alive !== false ? 'Running' : 'Exited' },
+    ];
+
+    let html = '<div class="sip-rows">';
+    for (const r of rows) {
+      html += `<div class="sip-row"><span class="sip-label">${r.label}</span><span class="sip-value">${escapeHtml(r.value)}</span></div>`;
+    }
+    html += '</div>';
+    html += `<div class="sip-cli"><code>${escapeHtml(fullCmd)}</code></div>`;
+    html += '<div class="sip-actions"><button class="sip-btn" id="sip-copy-cmd">Copy CLI Command</button></div>';
+
+    popover.innerHTML = html;
+    document.body.appendChild(popover);
+
+    // Position above the CLI button
+    const btnRect = statusCopyCli.getBoundingClientRect();
+    popover.style.bottom = (window.innerHeight - btnRect.top + 4) + 'px';
+    popover.style.right = (window.innerWidth - btnRect.right) + 'px';
+
+    document.getElementById('sip-copy-cmd').onclick = () => {
+      navigator.clipboard.writeText(fullCmd).then(
+        () => showToast('CLI command copied', 'info', 2000),
+        () => showToast('Failed to copy', 'error', 2000)
+      );
+    };
+
+    // Close on click outside
+    const close = (ev) => {
+      if (!popover.contains(ev.target) && ev.target !== statusCopyCli) {
+        popover.remove();
+        document.removeEventListener('mousedown', close);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', close), 0);
+  }
+
+  // --- Status bar changes indicator ---
+
+  function updateStatusChangesCount(data) {
+    if (!statusChanges) return;
+    const total = (data.staged ? data.staged.length : 0) +
+      (data.unstaged ? data.unstaged.length : 0) +
+      (data.untracked ? data.untracked.length : 0);
+    if (total > 0) {
+      statusChanges.classList.remove('hidden');
+      statusChanges.innerHTML =
+        `<span class="status-changes-icon">\u25CF</span> ${total} change${total === 1 ? '' : 's'}`;
+    } else {
+      statusChanges.classList.add('hidden');
+      statusChanges.textContent = '';
+    }
+  }
+
+  if (statusChanges) {
+    statusChanges.onclick = () => {
+      // Switch to Git tab in the right panel
+      const gitTab = rightPanelTabs.querySelector('[data-rp-tab="git"]');
+      if (gitTab) gitTab.click();
+    };
+  }
+
+  // --- Git tab notification badge ---
+
+  function setGitTabBadge(show) {
+    gitChangesPending = show;
+    const gitTab = rightPanelTabs.querySelector('[data-rp-tab="git"]');
+    if (!gitTab) return;
+    const existing = gitTab.querySelector('.rp-tab-badge');
+    if (show && !existing) {
+      const badge = document.createElement('span');
+      badge.className = 'rp-tab-badge';
+      gitTab.appendChild(badge);
+    } else if (!show && existing) {
+      existing.remove();
+    }
+  }
+
+  // --- Terminal font size zoom ---
+
+  function updateFontSizeDisplay() {
+    if (statusFontSize) {
+      statusFontSize.textContent = `${termFontSize}px`;
+    }
+  }
+
+  if (statusFontSize) {
+    statusFontSize.onclick = () => setTermFontSize(DEFAULT_FONT_SIZE);
+  }
+
+  function setTermFontSize(size) {
+    termFontSize = Math.max(MIN_FONT_SIZE, Math.min(MAX_FONT_SIZE, size));
+    if (term) {
+      term.options.fontSize = termFontSize;
+      if (fitAddon) fitAddon.fit();
+    }
+    if (shellTerm) {
+      shellTerm.options.fontSize = termFontSize;
+      if (shellFitAddon) shellFitAddon.fit();
+    }
+    updateFontSizeDisplay();
+  }
+
+  // --- Mini sidebar toggle ---
+
+  function toggleMiniSidebar() {
+    sidebarCollapsed = !sidebarCollapsed;
+    sidebar.classList.toggle('sidebar-mini', sidebarCollapsed);
+    requestAnimationFrame(() => {
+      if (fitAddon) fitAddon.fit();
+      if (shellFitAddon) shellFitAddon.fit();
+    });
+  }
+
+  // --- Focus mode ---
+
+  function toggleFocusMode() {
+    focusModeActive = !focusModeActive;
+    sidebar.classList.toggle('focus-hidden', focusModeActive);
+    sidebarDivider.classList.toggle('focus-hidden', focusModeActive);
+    if (focusModeActive) {
+      rightPanel.classList.add('focus-hidden');
+    } else {
+      rightPanel.classList.remove('focus-hidden');
+    }
+    // Refit terminal after layout change
+    requestAnimationFrame(() => {
+      if (fitAddon) fitAddon.fit();
+      if (shellFitAddon) shellFitAddon.fit();
+    });
+    if (focusModeActive) {
+      showToast('Focus mode on \u2014 press Ctrl+\\ to exit', 'info', 2000);
+    }
+  }
+
+  // --- Breadcrumb rename on double-click ---
+
+  breadcrumbSession.ondblclick = () => {
+    if (!activeSessionId) return;
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session) return;
+
+    const currentName = session.name || 'Untitled';
+    const input = document.createElement('input');
+    input.type = 'text';
+    input.value = currentName;
+    input.className = 'breadcrumb-rename-input';
+
+    breadcrumbSession.textContent = '';
+    breadcrumbSession.appendChild(input);
+    input.focus();
+    input.select();
+
+    let committed = false;
+    const commit = async () => {
+      if (committed) return;
+      committed = true;
+      const newName = input.value.trim();
+      if (newName && newName !== currentName) {
+        try {
+          const res = await fetch(`/api/sessions/${activeSessionId}/rename`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ name: newName }),
+          });
+          if (res.ok) {
+            session.name = newName;
+            renderSidebar();
+          }
+        } catch { /* ignore */ }
+      }
+      breadcrumbSession.textContent = session.name || 'Untitled';
+    };
+
+    input.onblur = commit;
+    input.onkeydown = (e) => {
+      if (e.key === 'Enter') commit();
+      if (e.key === 'Escape') {
+        committed = true;
+        breadcrumbSession.textContent = currentName;
+      }
+    };
+  };
+
+  // --- Sidebar filter ---
+
+  sidebarFilter.oninput = debounce(() => {
+    filterSidebar(sidebarFilter.value.trim().toLowerCase());
+  }, 150);
+
+  function filterSidebar(query) {
+    const groups = projectListEl.querySelectorAll('.project-group');
+    groups.forEach(group => {
+      const sessionItems = group.querySelectorAll('.project-sessions li[data-session-id]');
+      let visibleCount = 0;
+
+      sessionItems.forEach(li => {
+        const nameEl = li.querySelector('.session-name');
+        const branchEl = li.querySelector('.branch-badge');
+        const name = nameEl ? nameEl.textContent.toLowerCase() : '';
+        const branch = branchEl ? branchEl.textContent.toLowerCase() : '';
+        if (!query || name.includes(query) || branch.includes(query)) {
+          li.style.display = '';
+          visibleCount++;
+        } else {
+          li.style.display = 'none';
+        }
+      });
+
+      // Auto-expand project groups that have matches when filtering
+      if (query && visibleCount > 0) {
+        const ul = group.querySelector('.project-sessions');
+        if (ul && !ul.classList.contains('expanded')) {
+          ul.classList.add('expanded', 'filter-expanded');
+          const arrow = group.querySelector('.project-arrow');
+          if (arrow) arrow.classList.add('expanded');
+        }
+      }
+
+      // Hide project groups with no matching sessions (only when filtering)
+      if (query && visibleCount === 0) {
+        group.style.display = 'none';
+      } else {
+        group.style.display = '';
+      }
+    });
+
+    // Restore state when filter is cleared
+    if (!query) {
+      groups.forEach(group => {
+        const ul = group.querySelector('.project-sessions');
+        if (ul && ul.classList.contains('filter-expanded')) {
+          ul.classList.remove('filter-expanded', 'expanded');
+          const arrow = group.querySelector('.project-arrow');
+          if (arrow) arrow.classList.remove('expanded');
+        }
+        group.querySelectorAll('.project-sessions li[data-session-id]').forEach(li => {
+          li.style.display = '';
+        });
+      });
+    }
+  }
+
   // --- Init ---
   initTerminal();
   initShellTerminal();
+  startSidebarTimeUpdates();
+  updateFontSizeDisplay();
   connect();
 })();
