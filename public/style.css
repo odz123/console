@@ -1024,6 +1024,26 @@ body {
   flex-shrink: 0;
 }
 
+.git-merge-btn {
+  padding: 2px 8px;
+  font-size: 10px;
+  font-weight: 600;
+  background: #569cd6;
+  color: #1a1a2e;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+.git-merge-btn:hover {
+  background: #4a8bc2;
+}
+.git-merge-btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .git-commit-form {
   display: flex;
   gap: 4px;

@@ -470,3 +470,119 @@ describe('Git API - Log', () => {
     assert.strictEqual(res.status, 404);
   });
 });
+
+describe('Git API - Merge to Main', () => {
+  let server, baseUrl, tempDir, sessionId, worktreePath;
+
+  before(async () => {
+    server = createServer({ testMode: true });
+    await new Promise((resolve) => server.listen(0, resolve));
+    baseUrl = `http://localhost:${server.address().port}`;
+
+    tempDir = createTempRepo();
+
+    const projRes = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'git-merge-test', cwd: tempDir }),
+    });
+    const project = await projRes.json();
+
+    const sessRes = await fetch(`${baseUrl}/api/projects/${project.id}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'merge-session' }),
+    });
+    const session = await sessRes.json();
+    sessionId = session.id;
+    worktreePath = path.join(tempDir, session.worktreePath);
+  });
+
+  after(async () => {
+    await server.destroy();
+    if (tempDir) cleanupDir(tempDir);
+  });
+
+  it('POST merge-to-main merges committed changes into default branch', async () => {
+    // Create and commit a file in the worktree
+    fs.writeFileSync(path.join(worktreePath, 'merged-file.txt'), 'merged content');
+    execSync('git add merged-file.txt && git -c commit.gpgsign=false commit -m "add merged file"', {
+      cwd: worktreePath,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/git/merge-to-main`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.strictEqual(data.ok, true);
+    assert.ok(data.mergedBranch.startsWith('claude/'), 'should include branch name');
+    assert.ok(data.targetBranch, 'should include target branch');
+    assert.ok(data.commit.hash, 'should include commit hash');
+
+    // Verify the file exists on the default branch
+    const defaultBranch = data.targetBranch;
+    const mainContent = execSync(`git show ${defaultBranch}:merged-file.txt`, {
+      cwd: tempDir, encoding: 'utf-8',
+    });
+    assert.strictEqual(mainContent, 'merged content');
+  });
+
+  it('POST merge-to-main rejects when worktree has uncommitted changes', async () => {
+    // Create uncommitted changes
+    fs.writeFileSync(path.join(worktreePath, 'dirty.txt'), 'uncommitted');
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/git/merge-to-main`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    assert.strictEqual(res.status, 400);
+    const data = await res.json();
+    assert.strictEqual(data.code, 'DIRTY_WORKTREE');
+
+    // Clean up
+    fs.unlinkSync(path.join(worktreePath, 'dirty.txt'));
+  });
+
+  it('POST merge-to-main returns 404 for unknown session', async () => {
+    const res = await fetch(`${baseUrl}/api/sessions/nonexistent/git/merge-to-main`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    assert.strictEqual(res.status, 404);
+  });
+
+  it('POST merge-to-main handles merge conflicts', async () => {
+    // Create a conflicting file on the default branch
+    const defaultBranch = execSync('git rev-parse --abbrev-ref HEAD', {
+      cwd: tempDir, encoding: 'utf-8',
+    }).trim();
+
+    fs.writeFileSync(path.join(tempDir, 'conflict-file.txt'), 'main version');
+    execSync('git add conflict-file.txt && git -c commit.gpgsign=false commit -m "main conflict"', {
+      cwd: tempDir,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    // Create the same file with different content in the worktree
+    fs.writeFileSync(path.join(worktreePath, 'conflict-file.txt'), 'branch version');
+    execSync('git add conflict-file.txt && git -c commit.gpgsign=false commit -m "branch conflict"', {
+      cwd: worktreePath,
+      env: { ...process.env, ...gitEnv },
+    });
+
+    const res = await fetch(`${baseUrl}/api/sessions/${sessionId}/git/merge-to-main`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+    });
+    assert.strictEqual(res.status, 409);
+    const data = await res.json();
+    assert.strictEqual(data.code, 'MERGE_CONFLICT');
+
+    // Verify the merge was aborted and main is clean (ignore untracked like .worktrees/)
+    const status = execSync('git status --porcelain -uno', { cwd: tempDir, encoding: 'utf-8' });
+    assert.strictEqual(status.trim(), '', 'main should be clean after merge abort');
+  });
+});

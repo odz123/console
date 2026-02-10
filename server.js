@@ -529,6 +529,121 @@ export function createServer({ testMode = false } = {}) {
     }
   });
 
+  app.post('/api/sessions/:id/git/merge-to-main', async (req, res) => {
+    const result = await resolveSessionCwd(req.params.id);
+    if (result.error) return res.status(result.status).json({ error: result.error });
+
+    const { cwd, session, project } = result;
+
+    if (!session.branchName) {
+      return res.status(400).json({ error: 'Session has no branch', code: 'NO_BRANCH' });
+    }
+
+    const fullBranchName = `claude/${session.branchName}`;
+
+    try {
+      // Check worktree is clean
+      const { stdout: statusOut } = await execFileAsync('git', ['status', '--porcelain'], { cwd });
+      if (statusOut.trim()) {
+        return res.status(400).json({
+          error: 'Worktree has uncommitted changes. Commit or discard before merging.',
+          code: 'DIRTY_WORKTREE',
+        });
+      }
+
+      // Detect default branch from project root
+      let defaultBranch;
+      try {
+        // Try symbolic-ref for the remote HEAD
+        const { stdout: symRef } = await execFileAsync(
+          'git', ['symbolic-ref', 'refs/remotes/origin/HEAD'],
+          { cwd: project.cwd }
+        );
+        defaultBranch = symRef.trim().replace('refs/remotes/origin/', '');
+      } catch {
+        // Fall back: check for common branch names
+        for (const candidate of ['main', 'master']) {
+          try {
+            await execFileAsync('git', ['rev-parse', '--verify', candidate], { cwd: project.cwd });
+            defaultBranch = candidate;
+            break;
+          } catch {
+            // try next
+          }
+        }
+      }
+
+      if (!defaultBranch) {
+        return res.status(400).json({
+          error: 'Cannot determine default branch (main/master). Ensure one exists.',
+          code: 'NO_DEFAULT_BRANCH',
+        });
+      }
+
+      // Check for any uncommitted changes on the main worktree (project root)
+      // Use -uno to ignore untracked files (e.g. .worktrees/ directory)
+      const { stdout: mainStatus } = await execFileAsync('git', ['status', '--porcelain', '-uno'], { cwd: project.cwd });
+      if (mainStatus.trim()) {
+        return res.status(400).json({
+          error: `The ${defaultBranch} branch has uncommitted changes. Clean it before merging.`,
+          code: 'MAIN_DIRTY',
+        });
+      }
+
+      // Verify the project root is actually on the default branch
+      const { stdout: currentBranch } = await execFileAsync(
+        'git', ['rev-parse', '--abbrev-ref', 'HEAD'],
+        { cwd: project.cwd }
+      );
+      if (currentBranch.trim() !== defaultBranch) {
+        return res.status(400).json({
+          error: `Project root is on '${currentBranch.trim()}', expected '${defaultBranch}'. Cannot merge.`,
+          code: 'WRONG_BRANCH',
+        });
+      }
+
+      // Perform the merge from the project root
+      try {
+        await execFileAsync(
+          'git', ['-c', 'commit.gpgsign=false', 'merge', '--no-edit', fullBranchName],
+          { cwd: project.cwd }
+        );
+      } catch (mergeErr) {
+        // Check if it's a merge conflict (git outputs conflict info to stdout)
+        const mergeOutput = (mergeErr.stdout || '') + (mergeErr.stderr || '') + (mergeErr.message || '');
+        if (mergeOutput.includes('CONFLICT') || mergeOutput.includes('Automatic merge failed') || mergeOutput.includes('Merge conflict')) {
+          // Abort the failed merge to leave the project clean
+          try {
+            await execFileAsync('git', ['merge', '--abort'], { cwd: project.cwd });
+          } catch {
+            // Best effort
+          }
+          return res.status(409).json({
+            error: 'Merge conflict. Resolve conflicts manually or use the shell terminal.',
+            code: 'MERGE_CONFLICT',
+          });
+        }
+        throw mergeErr;
+      }
+
+      // Get the merge commit info
+      const { stdout: logOut } = await execFileAsync(
+        'git', ['log', '-1', '--format=%H%n%h%n%s%n%an%n%aI'],
+        { cwd: project.cwd }
+      );
+      const [hash, shortHash, subject, author, date] = logOut.trim().split('\n');
+
+      res.json({
+        ok: true,
+        mergedBranch: fullBranchName,
+        targetBranch: defaultBranch,
+        commit: { hash, shortHash, message: subject, author, date },
+      });
+    } catch (e) {
+      res.status(500).json({ error: `Merge failed: ${e.stderr || e.message}` });
+    }
+  });
+
   app.get('/api/sessions/:id/git/log', async (req, res) => {
     const result = await resolveSessionCwd(req.params.id);
     if (result.error) return res.status(result.status).json({ error: result.error });

@@ -75,6 +75,7 @@
   const gitBranchName = document.getElementById('git-branch-name');
   const gitAheadBehind = document.getElementById('git-ahead-behind');
   const btnGitRefresh = document.getElementById('btn-git-refresh');
+  const btnGitMerge = document.getElementById('btn-git-merge');
   const gitCommitMessage = document.getElementById('git-commit-message');
   const btnGitCommit = document.getElementById('btn-git-commit');
   const gitFileList = document.getElementById('git-file-list');
@@ -1789,6 +1790,56 @@
   };
 
   btnGitRefresh.onclick = refreshGitStatus;
+
+  // --- Merge to Main ---
+
+  btnGitMerge.onclick = () => {
+    const branch = gitBranchName.textContent || 'this branch';
+    showConfirmDialog(
+      'Merge to Main',
+      `Merge "${branch}" into the default branch (main/master)? All committed changes will be applied.`,
+      gitMergeToMain
+    );
+  };
+
+  async function gitMergeToMain() {
+    if (!activeSessionId) return;
+
+    btnGitMerge.disabled = true;
+    btnGitMerge.textContent = 'Merging...';
+
+    try {
+      const res = await fetch(`/api/sessions/${activeSessionId}/git/merge-to-main`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      });
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        if (data.code === 'MERGE_CONFLICT') {
+          showToast('Merge conflict! Resolve manually in the shell terminal.', 'warning', 6000);
+        } else if (data.code === 'DIRTY_WORKTREE') {
+          showToast('Commit or discard changes before merging.', 'warning');
+        } else {
+          showToast(data.error || 'Merge failed', 'error');
+        }
+        return;
+      }
+
+      showToast(
+        `Merged ${data.mergedBranch} into ${data.targetBranch} (${data.commit.shortHash})`,
+        'success',
+        6000
+      );
+      refreshGitStatus();
+    } catch {
+      showToast('Merge failed', 'error');
+    } finally {
+      btnGitMerge.disabled = false;
+      btnGitMerge.textContent = 'Merge to Main';
+    }
+  }
 
   // --- Git Diff Viewer ---
 
