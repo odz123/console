@@ -41,7 +41,18 @@
       <div id="file-viewer" class="hidden">
         <div id="file-viewer-toolbar">
           <span id="file-viewer-path"></span>
-          <button id="file-viewer-refresh" title="Refresh">Refresh</button>
+          <div class="file-viewer-actions">
+            <button id="file-viewer-wrap" class="fv-btn" title="Toggle word wrap">Wrap</button>
+            <button id="file-viewer-copy" class="fv-btn" title="Copy file content">Copy</button>
+            <button id="file-viewer-refresh" title="Refresh">Refresh</button>
+          </div>
+        </div>
+        <div id="fv-search-bar" class="fv-search-bar hidden">
+          <input id="fv-search-input" type="text" placeholder="Find in file..." autocomplete="off">
+          <span id="fv-search-count" class="fv-search-count"></span>
+          <button id="fv-search-prev" class="fv-search-btn" title="Previous">&uarr;</button>
+          <button id="fv-search-next" class="fv-search-btn" title="Next">&darr;</button>
+          <button id="fv-search-close" class="fv-search-btn" title="Close">&times;</button>
         </div>
         <div id="file-viewer-content"></div>
       </div>
@@ -73,6 +84,7 @@
           <button id="status-interrupt" class="status-btn" title="Send interrupt (Ctrl+C)">Interrupt</button>
           <button id="status-compact" class="status-btn" title="Send /compact to reduce context">Compact</button>
           <button id="status-restart" class="status-btn status-btn-restart hidden" title="Restart session">Restart</button>
+          <button id="status-copy-cli" class="status-btn" title="Copy CLI resume command">CLI</button>
         </div>
       </div>
     </main>
@@ -174,6 +186,7 @@
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>K</kbd><span>Command palette</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Tab</kbd><span>Cycle tabs</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find in file</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Focus mode</span></div>
           <div class="shortcut-row"><kbd>?</kbd><span>Show shortcuts</span></div>
         </div>

@@ -66,7 +66,20 @@
   const fileViewer = document.getElementById('file-viewer');
   const fileViewerPath = document.getElementById('file-viewer-path');
   const fileViewerRefresh = document.getElementById('file-viewer-refresh');
+  const fileViewerWrap = document.getElementById('file-viewer-wrap');
+  const fileViewerCopy = document.getElementById('file-viewer-copy');
   const fileViewerContent = document.getElementById('file-viewer-content');
+  let fileViewerWordWrap = false;
+
+  // File viewer search refs
+  const fvSearchBar = document.getElementById('fv-search-bar');
+  const fvSearchInput = document.getElementById('fv-search-input');
+  const fvSearchCount = document.getElementById('fv-search-count');
+  const fvSearchPrev = document.getElementById('fv-search-prev');
+  const fvSearchNext = document.getElementById('fv-search-next');
+  const fvSearchClose = document.getElementById('fv-search-close');
+  let fvSearchMatches = [];
+  let fvSearchCurrentIdx = -1;
   const btnToggleFileTree = document.getElementById('btn-toggle-file-tree');
   const btnRefreshFileTree = document.getElementById('btn-refresh-file-tree');
   const fileTreeSection = document.getElementById('file-tree-section');
@@ -122,9 +135,10 @@
   // Live sidebar timer
   let sidebarTimeTimer = null;
 
-  // Connection/restart refs
+  // Connection/restart/CLI refs
   const statusConnection = document.getElementById('status-connection');
   const statusRestart = document.getElementById('status-restart');
+  const statusCopyCli = document.getElementById('status-copy-cli');
 
   // Notification dot state
   let gitChangesPending = false;
@@ -134,6 +148,9 @@
 
   // Sidebar filter ref
   const sidebarFilter = document.getElementById('sidebar-filter');
+
+  // Git status cache for file tree change indicators
+  let gitFileStatusMap = new Map(); // filePath -> status letter (M, A, D, ?, etc.)
 
   // --- Helpers ---
   function wsSend(data) {
@@ -1624,6 +1641,31 @@
       empty.textContent = 'Empty directory';
       container.appendChild(empty);
     }
+
+    // Re-apply git status badges after tree content updates
+    if (gitFileStatusMap.size > 0) applyFileTreeGitBadges();
+  }
+
+  function applyFileTreeGitBadges() {
+    // Annotate file tree items with git status badges
+    const items = fileTreeEl.querySelectorAll('.file-tree-item:not(.file-tree-folder)');
+    items.forEach(item => {
+      // Remove existing badge
+      const old = item.querySelector('.file-tree-git-badge');
+      if (old) old.remove();
+
+      const label = item.querySelector('.file-tree-label');
+      if (!label) return;
+      const path = label.title || label.textContent;
+      const status = gitFileStatusMap.get(path);
+      if (status) {
+        const badge = document.createElement('span');
+        badge.className = `file-tree-git-badge git-status-${status.toLowerCase()}`;
+        badge.textContent = status;
+        badge.title = STATUS_LABELS[status] || status;
+        item.appendChild(badge);
+      }
+    });
   }
 
   function initFileTree() {
@@ -1674,10 +1716,15 @@
     claudeTab.onclick = () => switchTab('claude');
     tabList.appendChild(claudeTab);
 
-    // File tabs
-    for (const tab of openTabs) {
+    // File tabs — render pinned first, then unpinned
+    const sortedTabs = [...openTabs].sort((a, b) => (b.pinned ? 1 : 0) - (a.pinned ? 1 : 0));
+    // Reorder openTabs in-place to match sorted order
+    sortedTabs.forEach((t, idx) => { openTabs[idx] = t; });
+
+    for (let i = 0; i < openTabs.length; i++) {
+      const tab = openTabs[i];
       const el = document.createElement('div');
-      el.className = 'tab' + (activeTabId === tab.id ? ' active' : '');
+      el.className = 'tab' + (activeTabId === tab.id ? ' active' : '') + (tab.pinned ? ' tab-pinned' : '');
       el.title = tab.fullPath;
 
       // File type icon
@@ -1685,22 +1732,15 @@
       const tabIcon = createFileIcon(origName, 'tab-icon');
       el.appendChild(tabIcon);
 
-      const label = document.createElement('span');
-      label.className = 'tab-label';
-      label.textContent = tab.filename;
+      if (!tab.pinned) {
+        const label = document.createElement('span');
+        label.className = 'tab-label';
+        label.textContent = tab.filename;
+        el.appendChild(label);
+      }
 
-      const close = document.createElement('button');
-      close.className = 'tab-close';
-      close.textContent = '\u00D7';
-      close.onclick = (e) => {
-        e.stopPropagation();
-        closeTab(tab.id);
-      };
-
-      el.appendChild(label);
-
-      // Diff stats badge
-      if (tab.diffStats) {
+      // Diff stats badge (only for unpinned)
+      if (tab.diffStats && !tab.pinned) {
         const stats = document.createElement('span');
         stats.className = 'tab-diff-stats';
         const parts = [];
@@ -1710,7 +1750,18 @@
         el.appendChild(stats);
       }
 
-      el.appendChild(close);
+      // Close button (not for pinned tabs)
+      if (!tab.pinned) {
+        const close = document.createElement('button');
+        close.className = 'tab-close';
+        close.textContent = '\u00D7';
+        close.onclick = (e) => {
+          e.stopPropagation();
+          closeTab(tab.id);
+        };
+        el.appendChild(close);
+      }
+
       el.onclick = () => switchTab(tab.id);
       el.oncontextmenu = (e) => {
         e.preventDefault();
@@ -1769,6 +1820,7 @@
   function switchTab(tabId) {
     activeTabId = tabId;
     renderTabs();
+    closeFvSearch();
 
     const termWrapper = document.getElementById('terminal-wrapper');
 
@@ -1798,6 +1850,8 @@
   }
 
   function closeTab(tabId) {
+    const tab = openTabs.find(t => t.id === tabId);
+    if (tab && tab.pinned) return; // can't close pinned tabs
     openTabs = openTabs.filter(t => t.id !== tabId);
     if (activeTabId === tabId) {
       activeTabId = openTabs.length > 0 ? openTabs[openTabs.length - 1].id : 'claude';
@@ -1812,9 +1866,12 @@
   }
 
   function closeAllTabs() {
-    openTabs = [];
-    activeTabId = 'claude';
-    switchTab('claude');
+    const pinned = openTabs.filter(t => t.pinned);
+    openTabs = pinned;
+    if (!openTabs.find(t => t.id === activeTabId)) {
+      activeTabId = openTabs.length > 0 ? openTabs[0].id : 'claude';
+    }
+    switchTab(activeTabId);
   }
 
   function showTabContextMenu(e, tab) {
@@ -1827,9 +1884,10 @@
     menu.className = 'context-menu';
 
     const items = [
-      { label: 'Close', action: () => closeTab(tab.id) },
+      { label: tab.pinned ? 'Unpin' : 'Pin', action: () => { tab.pinned = !tab.pinned; renderTabs(); } },
+      { label: 'Close', action: () => closeTab(tab.id), disabled: tab.pinned },
       { label: 'Close Others', action: () => closeOtherTabs(tab.id), disabled: openTabs.length <= 1 },
-      { label: 'Close All', action: () => closeAllTabs() },
+      { label: 'Close All Unpinned', action: () => closeAllTabs() },
       { type: 'separator' },
       { label: 'Copy Path', action: () => { navigator.clipboard.writeText(tab.fullPath).catch(() => {}); showToast('Path copied', 'info', 2000); } },
     ];
@@ -2017,11 +2075,150 @@
     renderFileContent(tab);
   };
 
+  // Word wrap toggle
+  fileViewerWrap.onclick = () => {
+    fileViewerWordWrap = !fileViewerWordWrap;
+    fileViewerWrap.classList.toggle('fv-btn-active', fileViewerWordWrap);
+    fileViewerContent.classList.toggle('word-wrap', fileViewerWordWrap);
+  };
+
+  // Copy file content
+  fileViewerCopy.onclick = () => {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || !tab.content) return;
+    navigator.clipboard.writeText(tab.content).then(
+      () => showToast('Copied to clipboard', 'info', 2000),
+      () => showToast('Failed to copy', 'error', 2000)
+    );
+  };
+
+  // --- File viewer search ---
+
+  function openFvSearch() {
+    if (activeTabId === 'claude') return; // only for file tabs
+    fvSearchBar.classList.remove('hidden');
+    fvSearchInput.focus();
+    fvSearchInput.select();
+  }
+
+  function closeFvSearch() {
+    fvSearchBar.classList.add('hidden');
+    fvSearchInput.value = '';
+    clearFvSearchHighlights();
+    fvSearchCount.textContent = '';
+    fvSearchMatches = [];
+    fvSearchCurrentIdx = -1;
+  }
+
+  function performFvSearch(query) {
+    clearFvSearchHighlights();
+    fvSearchMatches = [];
+    fvSearchCurrentIdx = -1;
+    if (!query) {
+      fvSearchCount.textContent = '';
+      return;
+    }
+
+    const lowerQuery = query.toLowerCase();
+    // Walk text nodes in fileViewerContent and highlight matches
+    const walker = document.createTreeWalker(fileViewerContent, NodeFilter.SHOW_TEXT, null);
+    const textNodes = [];
+    while (walker.nextNode()) textNodes.push(walker.currentNode);
+
+    for (const node of textNodes) {
+      const text = node.textContent;
+      const lower = text.toLowerCase();
+      let idx = 0;
+      const parts = [];
+      let lastEnd = 0;
+
+      while ((idx = lower.indexOf(lowerQuery, idx)) !== -1) {
+        if (idx > lastEnd) {
+          parts.push({ text: text.slice(lastEnd, idx), match: false });
+        }
+        parts.push({ text: text.slice(idx, idx + query.length), match: true });
+        lastEnd = idx + query.length;
+        idx = lastEnd;
+      }
+
+      if (parts.length > 0) {
+        if (lastEnd < text.length) {
+          parts.push({ text: text.slice(lastEnd), match: false });
+        }
+        const frag = document.createDocumentFragment();
+        for (const p of parts) {
+          if (p.match) {
+            const mark = document.createElement('mark');
+            mark.className = 'fv-search-match';
+            mark.textContent = p.text;
+            fvSearchMatches.push(mark);
+            frag.appendChild(mark);
+          } else {
+            frag.appendChild(document.createTextNode(p.text));
+          }
+        }
+        node.parentNode.replaceChild(frag, node);
+      }
+    }
+
+    if (fvSearchMatches.length > 0) {
+      fvSearchCurrentIdx = 0;
+      fvSearchMatches[0].classList.add('fv-search-current');
+      fvSearchMatches[0].scrollIntoView({ block: 'center' });
+      fvSearchCount.textContent = `1 of ${fvSearchMatches.length}`;
+    } else {
+      fvSearchCount.textContent = 'No results';
+    }
+  }
+
+  function clearFvSearchHighlights() {
+    const marks = fileViewerContent.querySelectorAll('mark.fv-search-match');
+    marks.forEach(mark => {
+      const parent = mark.parentNode;
+      parent.replaceChild(document.createTextNode(mark.textContent), mark);
+      parent.normalize(); // merge adjacent text nodes
+    });
+    fvSearchMatches = [];
+    fvSearchCurrentIdx = -1;
+  }
+
+  function navigateFvSearch(delta) {
+    if (fvSearchMatches.length === 0) return;
+    fvSearchMatches[fvSearchCurrentIdx].classList.remove('fv-search-current');
+    fvSearchCurrentIdx = (fvSearchCurrentIdx + delta + fvSearchMatches.length) % fvSearchMatches.length;
+    fvSearchMatches[fvSearchCurrentIdx].classList.add('fv-search-current');
+    fvSearchMatches[fvSearchCurrentIdx].scrollIntoView({ block: 'center' });
+    fvSearchCount.textContent = `${fvSearchCurrentIdx + 1} of ${fvSearchMatches.length}`;
+  }
+
+  fvSearchInput.oninput = debounce(() => {
+    performFvSearch(fvSearchInput.value.trim());
+  }, 200);
+
+  fvSearchInput.onkeydown = (e) => {
+    if (e.key === 'Escape') { closeFvSearch(); return; }
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      navigateFvSearch(e.shiftKey ? -1 : 1);
+    }
+  };
+
+  fvSearchNext.onclick = () => navigateFvSearch(1);
+  fvSearchPrev.onclick = () => navigateFvSearch(-1);
+  fvSearchClose.onclick = closeFvSearch;
+
   // Keyboard shortcuts (only when terminal is NOT focused)
   document.addEventListener('keydown', (e) => {
     const inTerminal = terminalEl.contains(document.activeElement) ||
                        shellTerminalEl.contains(document.activeElement);
     if (inTerminal) return;
+
+    // Ctrl+F — open file viewer search (only when viewing a file)
+    if (e.key === 'f' && (e.ctrlKey || e.metaKey) && activeTabId !== 'claude') {
+      e.preventDefault();
+      openFvSearch();
+      return;
+    }
 
     if (e.altKey && e.key === 'Tab') {
       e.preventDefault();
@@ -2100,6 +2297,16 @@
     if (data.ahead > 0) parts.push(`+${data.ahead}`);
     if (data.behind > 0) parts.push(`-${data.behind}`);
     gitAheadBehind.textContent = parts.join(' ');
+
+    // Build file status map for tree change indicators
+    gitFileStatusMap = new Map();
+    for (const f of data.staged) gitFileStatusMap.set(f.path, f.status);
+    for (const f of data.unstaged) {
+      if (!gitFileStatusMap.has(f.path)) gitFileStatusMap.set(f.path, f.status);
+    }
+    for (const f of data.untracked) gitFileStatusMap.set(f, '?');
+    // Update file tree badges
+    applyFileTreeGitBadges();
 
     // Enable/disable commit button based on staged files
     btnGitCommit.disabled = data.staged.length === 0;
@@ -3174,6 +3381,27 @@
     await restartSession(activeSessionId);
     statusRestart.disabled = false;
     statusRestart.textContent = 'Restart';
+  };
+
+  // --- Copy CLI resume command ---
+
+  statusCopyCli.onclick = () => {
+    if (!activeSessionId) return;
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session) return;
+    const resumeId = session.claudeSessionId;
+    const project = projects.find(p => p.id === session.projectId);
+    let cmd;
+    if (session.provider === 'codex') {
+      cmd = resumeId ? `codex --resume ${resumeId}` : 'codex';
+    } else {
+      cmd = resumeId ? `claude --resume ${resumeId}` : 'claude';
+    }
+    if (project) cmd += ` --cwd ${project.cwd}`;
+    navigator.clipboard.writeText(cmd).then(
+      () => showToast('CLI command copied', 'info', 2000),
+      () => showToast('Failed to copy', 'error', 2000)
+    );
   };
 
   // --- Git tab notification badge ---

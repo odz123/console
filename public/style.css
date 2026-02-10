@@ -644,6 +644,16 @@ body {
   display: block;
 }
 
+/* File tree git badges */
+.file-tree-git-badge {
+  font-size: 9px;
+  font-weight: 700;
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  margin-left: auto;
+  padding: 0 4px;
+  flex-shrink: 0;
+}
+
 .file-tree-loading {
   padding: 4px 8px 4px 32px;
   font-size: 11px;
@@ -1026,6 +1036,15 @@ body {
   text-overflow: ellipsis;
 }
 
+.tab-pinned {
+  padding: 4px 6px;
+  max-width: 36px;
+  border-right: 1px solid #3d3a36;
+}
+.tab-pinned .tab-icon {
+  font-size: 12px;
+}
+
 .tab-dragging {
   opacity: 0.4;
 }
@@ -1080,6 +1099,34 @@ body {
   white-space: nowrap;
 }
 
+.file-viewer-actions {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+  flex-shrink: 0;
+}
+
+.fv-btn {
+  padding: 2px 8px;
+  font-size: 11px;
+  background: #3d3a36;
+  color: #8c8478;
+  border: none;
+  border-radius: 3px;
+  cursor: pointer;
+}
+.fv-btn:hover {
+  background: #4a4540;
+  color: #f0ebe3;
+}
+.fv-btn-active {
+  background: #d97757;
+  color: #fff;
+}
+.fv-btn-active:hover {
+  background: #c4653f;
+}
+
 #file-viewer-refresh {
   padding: 2px 8px;
   font-size: 11px;
@@ -1091,6 +1138,60 @@ body {
 }
 #file-viewer-refresh:hover {
   background: #d97757;
+}
+
+/* File viewer search bar */
+.fv-search-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  background: #343230;
+  border-bottom: 1px solid #3d3a36;
+  flex-shrink: 0;
+}
+.fv-search-bar.hidden { display: none; }
+
+#fv-search-input {
+  flex: 1;
+  max-width: 260px;
+  padding: 3px 8px;
+  background: #2b2a27;
+  border: 1px solid #3d3a36;
+  border-radius: 3px;
+  color: #f0ebe3;
+  font-size: 12px;
+  outline: none;
+}
+#fv-search-input:focus { border-color: #d97757; }
+
+.fv-search-count {
+  font-size: 11px;
+  color: #8c8478;
+  min-width: 50px;
+}
+
+.fv-search-btn {
+  padding: 2px 6px;
+  background: none;
+  border: none;
+  color: #8c8478;
+  font-size: 13px;
+  cursor: pointer;
+  border-radius: 3px;
+}
+.fv-search-btn:hover {
+  background: #3d3a36;
+  color: #f0ebe3;
+}
+
+.fv-search-match {
+  background: rgba(217, 119, 87, 0.35);
+  border-radius: 2px;
+}
+.fv-search-match.fv-search-current {
+  background: rgba(217, 119, 87, 0.7);
+  outline: 1px solid #d97757;
 }
 
 #file-viewer-content {
@@ -1206,10 +1307,19 @@ body {
 }
 
 .line-content {
-  white-space: pre-wrap;
+  white-space: pre;
   flex: 1;
   min-width: 0;
+}
+
+/* Word wrap mode */
+#file-viewer-content.word-wrap .line-content {
+  white-space: pre-wrap;
   overflow-wrap: break-word;
+}
+#file-viewer-content.word-wrap .diff-line {
+  white-space: pre-wrap;
+  word-break: break-all;
 }
 
 /* Binary file placeholder */
