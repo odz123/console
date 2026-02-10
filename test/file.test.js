@@ -16,7 +16,7 @@ const gitEnv = {
 
 function createTempRepo() {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'file-test-'));
-  execSync('git init && git commit --allow-empty -m "init"', {
+  execSync('git init && git -c commit.gpgsign=false commit --allow-empty -m "init"', {
     cwd: dir,
     env: { ...process.env, ...gitEnv },
   });

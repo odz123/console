@@ -22,7 +22,7 @@ function createTempDir() {
 
 function createTempRepo() {
   const dir = createTempDir();
-  execSync('git init && git commit --allow-empty -m "init"', { cwd: dir, env: { ...process.env, ...gitEnv } });
+  execSync('git init && git -c commit.gpgsign=false commit --allow-empty -m "init"', { cwd: dir, env: { ...process.env, ...gitEnv } });
   return dir;
 }
 
