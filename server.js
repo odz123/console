@@ -61,9 +61,11 @@ export function createServer({ testMode = false } = {}) {
     res.setHeader('X-XSS-Protection', '0');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
     res.setHeader('Permissions-Policy', 'camera=(), microphone=(), geolocation=()');
+    const reqHost = req.hostname || '127.0.0.1';
+    const wsOrigins = `ws://${reqHost}:* wss://${reqHost}:*`;
     res.setHeader(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ws://127.0.0.1:* ws://localhost:*; img-src 'self' data:; font-src 'self'"
+      `default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ${wsOrigins}; img-src 'self' data:; font-src 'self'`
     );
     next();
   });
@@ -1729,6 +1731,8 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
     process.exit(1);
   }
 
+  const host = process.env.HOST || '127.0.0.1';
+
   const server = createServer();
 
   // --- Process-level Error Handlers ---
@@ -1773,7 +1777,16 @@ if (process.argv[1] && pathToFileURL(process.argv[1]).href === import.meta.url) 
   process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
   process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
-  server.listen(port, '127.0.0.1', () => {
-    console.log(`Claude Console running at http://127.0.0.1:${port}`);
+  server.listen(port, host, () => {
+    const boundAddress = server.address().address;
+    const isLocalhost = boundAddress === '127.0.0.1' || boundAddress === '::1';
+    if (!isLocalhost) {
+      console.warn('');
+      console.warn('⚠  WARNING: Server is bound to a non-loopback address.');
+      console.warn('   /api/browse and /api/file expose filesystem contents.');
+      console.warn('   Only use this on trusted local networks.');
+      console.warn('');
+    }
+    console.log(`Claude Console running at http://${boundAddress}:${port}`);
   });
 }
