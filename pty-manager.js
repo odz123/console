@@ -62,6 +62,15 @@ class PtyProcess extends EventEmitter {
     }
   }
 
+  /**
+   * Inject data into the buffer and emit to listeners without writing to PTY.
+   * Used to append terminal cleanup sequences after process exit.
+   */
+  injectData(data) {
+    this._pushToBuffer(data);
+    this.emit('data', data);
+  }
+
   write(data) {
     if (this.alive) {
       this.pty.write(data);
@@ -151,6 +160,15 @@ export class PtyManager {
   getBuffer(sessionId) {
     const proc = this.processes.get(sessionId);
     return proc ? proc.buffer : [];
+  }
+
+  /**
+   * Inject data into a session's buffer and emit to listeners.
+   * Does not write to the PTY — used for post-exit cleanup sequences.
+   */
+  injectToBuffer(sessionId, data) {
+    const proc = this.processes.get(sessionId);
+    if (proc) proc.injectData(data);
   }
 
   write(sessionId, data) {

@@ -157,11 +157,17 @@
     const buttons = document.createElement('div');
     buttons.className = 'confirm-buttons';
 
+    // Shared cleanup: remove overlay and keydown listener
+    const cleanup = () => {
+      document.removeEventListener('keydown', handleEscape);
+      overlay.remove();
+    };
+
     const cancelBtn = document.createElement('button');
     cancelBtn.className = 'confirm-cancel';
     cancelBtn.textContent = 'Cancel';
     cancelBtn.onclick = () => {
-      overlay.remove();
+      cleanup();
       if (onCancel) onCancel();
     };
 
@@ -169,7 +175,7 @@
     confirmBtn.className = 'confirm-ok';
     confirmBtn.textContent = 'Delete Anyway';
     confirmBtn.onclick = () => {
-      overlay.remove();
+      cleanup();
       if (onConfirm) onConfirm();
     };
 
@@ -184,7 +190,7 @@
     // Close on overlay click
     overlay.onclick = (e) => {
       if (e.target === overlay) {
-        overlay.remove();
+        cleanup();
         if (onCancel) onCancel();
       }
     };
@@ -192,8 +198,7 @@
     // Close on Escape
     const handleEscape = (e) => {
       if (e.key === 'Escape') {
-        overlay.remove();
-        document.removeEventListener('keydown', handleEscape);
+        cleanup();
         if (onCancel) onCancel();
       }
     };
@@ -976,11 +981,17 @@
   async function createSession(projectId, name, provider = 'claude', providerOptions) {
     const body = { name, provider };
     if (providerOptions) body.providerOptions = providerOptions;
-    const res = await fetch(`/api/projects/${projectId}/sessions`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    let res;
+    try {
+      res = await fetch(`/api/projects/${projectId}/sessions`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+    } catch {
+      showToast('Network error creating session', 'error');
+      return null;
+    }
     if (!res.ok) {
       const err = await res.json();
       // Handle specific error codes
@@ -1245,6 +1256,10 @@
   }
 
   async function renderFileTreeDir(container, relativePath, depth) {
+    // Stamp a generation counter so stale async completions are discarded.
+    // This prevents collapsed/re-expanded folders from showing stale content.
+    const gen = (container._renderGen = (container._renderGen || 0) + 1);
+
     container.innerHTML = '';
 
     const loading = document.createElement('div');
@@ -1253,6 +1268,10 @@
     container.appendChild(loading);
 
     const { dirs, files, hasMore } = await fetchDirEntries(relativePath);
+
+    // Bail if a newer render (or a collapse) superseded this one
+    if (container._renderGen !== gen) return;
+
     container.innerHTML = '';
 
     const indent = depth * 16;
@@ -1289,6 +1308,8 @@
           expandedDirs.delete(dirPath);
           arrow.textContent = '\u25B6';
           children.classList.remove('expanded');
+          // Bump generation to cancel any in-flight async render
+          children._renderGen = (children._renderGen || 0) + 1;
           children.innerHTML = '';
         } else {
           expandedDirs.add(dirPath);
@@ -1421,11 +1442,14 @@
     if (tabId === 'claude') {
       // Show terminal, hide file viewer
       termWrapper.style.display = '';
-      termWrapper.style.inset = '32px 0 0 0';
+      const tabH = getComputedStyle(document.documentElement).getPropertyValue('--tab-bar-height') || '32px';
+      termWrapper.style.inset = tabH + ' 0 0 0';
       fileViewer.classList.add('hidden');
       term.focus();
-      // Refit terminal since we changed inset
-      requestAnimationFrame(() => { if (fitAddon) fitAddon.fit(); });
+      // Refit terminal synchronously so term.cols/rows are correct before
+      // attachSession() sends the attach message with dimensions.
+      // Reading clientWidth/clientHeight forces a reflow after the inset change.
+      if (fitAddon) fitAddon.fit();
     } else {
       // Show file viewer, hide terminal
       termWrapper.style.display = 'none';
@@ -1446,6 +1470,8 @@
     switchTab(activeTabId);
   }
 
+  const pendingFileOpens = new Set();
+
   async function openFileTab(filePath, filename) {
     // Check if already open
     const existing = openTabs.find(t => t.id === filePath);
@@ -1454,8 +1480,17 @@
       return;
     }
 
+    // Guard against duplicate concurrent fetches (e.g. double-click)
+    if (pendingFileOpens.has(filePath)) return;
+    pendingFileOpens.add(filePath);
+
     // Fetch file content
-    const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(filePath)}`);
+    let res;
+    try {
+      res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(filePath)}`);
+    } finally {
+      pendingFileOpens.delete(filePath);
+    }
 
     if (!res.ok) {
       const err = await res.json().catch(() => ({ error: 'Failed to load file' }));
@@ -1467,10 +1502,13 @@
     let tab;
 
     if (contentType.includes('application/json')) {
-      // Binary file response
+      // JSON response — either a binary file indicator or unexpected payload
       const data = await res.json();
       if (data.isBinary) {
         tab = { id: filePath, filename, fullPath: filePath, content: null, type: 'binary' };
+      } else {
+        showToast('Unsupported file type', 'error');
+        return;
       }
     } else {
       const content = await res.text();
@@ -1542,7 +1580,13 @@
     const tab = openTabs.find(t => t.id === activeTabId);
     if (!tab || tab.type === 'binary') return;
 
-    const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(tab.fullPath)}`);
+    let res;
+    try {
+      res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(tab.fullPath)}`);
+    } catch {
+      showToast('Network error refreshing file', 'error');
+      return;
+    }
     if (!res.ok) {
       showToast('Failed to refresh file', 'error');
       return;
@@ -1618,7 +1662,11 @@
       const res = await fetch(`/api/sessions/${activeSessionId}/git/status`);
       if (!res.ok) {
         const err = await res.json().catch(() => ({}));
-        gitFileList.innerHTML = `<div class="git-loading">${err.error || 'Failed to load status'}</div>`;
+        const errDiv = document.createElement('div');
+        errDiv.className = 'git-loading';
+        errDiv.textContent = err.error || 'Failed to load status';
+        gitFileList.innerHTML = '';
+        gitFileList.appendChild(errDiv);
         return;
       }
       const data = await res.json();

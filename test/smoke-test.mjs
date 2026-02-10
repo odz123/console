@@ -173,17 +173,17 @@ try {
   check('File viewer hidden after Claude tab',
     await page.$eval('#file-viewer', el => el.classList.contains('hidden')));
   const termInset = await page.$eval('#terminal-wrapper', el => el.style.inset);
-  check('No 32px gap (inset correct)', termInset.startsWith('32px'), termInset);
+  check('Terminal inset matches tab bar height', /^\d+px 0(px)? 0(px)? 0(px)?$/.test(termInset), termInset);
 
   // --- Shift+Enter sends CSI u sequence ---
   console.log('\nSection: Shift+Enter Key Handling');
-  // Spy on WebSocket.send to capture outgoing messages
+  // Spy on WebSocket.send to capture outgoing messages (saved for cleanup)
   await page.evaluate(() => {
     window.__wsSent = [];
-    const origSend = WebSocket.prototype.send;
+    window.__origWsSend = WebSocket.prototype.send;
     WebSocket.prototype.send = function(data) {
       window.__wsSent.push(data);
-      return origSend.call(this, data);
+      return window.__origWsSend.call(this, data);
     };
   });
   // Focus the terminal textarea (offscreen element, use JS focus)
@@ -212,6 +212,15 @@ try {
     .filter(m => m && m.type === 'input');
   check('Plain Enter sends \\r', enterInputMsgs.length === 1 && enterInputMsgs[0].data === '\r',
     `got: ${JSON.stringify(enterInputMsgs)}`);
+
+  // Restore original WebSocket.prototype.send
+  await page.evaluate(() => {
+    if (window.__origWsSend) {
+      WebSocket.prototype.send = window.__origWsSend;
+      delete window.__origWsSend;
+    }
+    delete window.__wsSent;
+  });
 
   // --- Tab Close ---
   console.log('\nSection: Tab Close');

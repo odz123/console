@@ -169,6 +169,8 @@ export function createServer({ testMode = false } = {}) {
       if (jsonStr.length < 1024) return _json.call(this, body);
 
       zlib.gzip(Buffer.from(jsonStr), (err, compressed) => {
+        // Response may already be sent (e.g. request timeout fired during gzip)
+        if (res.headersSent) return;
         if (err) return _json.call(this, body);
         res.setHeader('Content-Encoding', 'gzip');
         res.setHeader('Vary', 'Accept-Encoding');
@@ -431,7 +433,12 @@ export function createServer({ testMode = false } = {}) {
     }
 
     // Read file and check for binary (null bytes in first 8KB)
-    const content = await fs.promises.readFile(realResolved);
+    let content;
+    try {
+      content = await fs.promises.readFile(realResolved);
+    } catch {
+      return res.status(404).json({ error: 'File not found' });
+    }
     const checkBytes = content.subarray(0, 8192);
     if (checkBytes.includes(0)) {
       return res.json({ isBinary: true });
@@ -536,6 +543,17 @@ export function createServer({ testMode = false } = {}) {
     const { cwd } = result;
     const filePath = req.query.path;
     const isStaged = req.query.staged === 'true';
+
+    // Validate path doesn't contain traversal (consistent with stage/discard)
+    if (filePath) {
+      if (typeof filePath !== 'string') {
+        return res.status(400).json({ error: 'path must be a string' });
+      }
+      const normalized = path.normalize(filePath);
+      if (path.isAbsolute(filePath) || normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+        return res.status(403).json({ error: 'Path traversal not allowed' });
+      }
+    }
 
     try {
       const args = ['diff', '--no-color'];
@@ -934,6 +952,13 @@ export function createServer({ testMode = false } = {}) {
     }
 
     manager.onExit(session.id, () => {
+      // Inject terminal cleanup: exit alternate screen + show cursor.
+      // This ensures TUI apps (Codex, Claude) leave a clean terminal state
+      // for both attached clients and future buffer replays.
+      manager.injectToBuffer(session.id,
+        '\x1b[?1049l'  // exit alternate screen (restore normal screen)
+        + '\x1b[?25h'  // show cursor
+      );
       store.updateSession(session.id, { status: 'exited' });
       broadcastState();
       const msg = JSON.stringify({ type: 'exited', sessionId: session.id });
@@ -1033,7 +1058,7 @@ export function createServer({ testMode = false } = {}) {
     const expanded = cwd.startsWith('~') ? cwd.replace(/^~/, os.homedir()) : cwd;
     const resolvedCwd = path.resolve(expanded);
     try {
-      const stat = fs.statSync(resolvedCwd);
+      const stat = await fs.promises.stat(resolvedCwd);
       if (!stat.isDirectory()) {
         return res.status(400).json({ error: 'cwd is not a directory' });
       }
@@ -1139,7 +1164,7 @@ export function createServer({ testMode = false } = {}) {
     }
 
     try {
-      const stat = fs.statSync(project.cwd);
+      const stat = await fs.promises.stat(project.cwd);
       if (!stat.isDirectory()) throw new Error();
     } catch {
       return res.status(400).json({ error: 'Project directory no longer exists' });
@@ -1364,7 +1389,7 @@ export function createServer({ testMode = false } = {}) {
     if (!project) return res.status(400).json({ error: 'Parent project not found' });
 
     try {
-      const stat = fs.statSync(project.cwd);
+      const stat = await fs.promises.stat(project.cwd);
       if (!stat.isDirectory()) throw new Error();
     } catch {
       return res.status(400).json({ error: 'Project directory no longer exists' });
@@ -1407,7 +1432,8 @@ export function createServer({ testMode = false } = {}) {
     for (const ws of clients) {
       if (ws.isAlive === false) {
         clients.delete(ws);
-        return ws.terminate();
+        ws.terminate();
+        continue;
       }
       ws.isAlive = false;
       ws.ping();
@@ -1437,6 +1463,7 @@ export function createServer({ testMode = false } = {}) {
         sessions: sessions.map((s) => ({
           ...s,
           alive: manager.isAlive(s.id),
+          idle: manager.isIdle(s.id),
         })),
       })
     );
@@ -1445,6 +1472,8 @@ export function createServer({ testMode = false } = {}) {
     let dataListener = null;
     let shellDataListener = null;
     let attachedShellSessionId = null;
+    // Track pending SIGWINCH nudge timer so resize messages can cancel it
+    let nudgeTimer = null;
 
     ws.on('message', async (raw) => {
       let msg;
@@ -1461,7 +1490,9 @@ export function createServer({ testMode = false } = {}) {
       if (msg.sessionId !== undefined && typeof msg.sessionId !== 'string') return;
       if (msg.cols !== undefined && (!Number.isInteger(msg.cols) || msg.cols < 1 || msg.cols > 500)) return;
       if (msg.rows !== undefined && (!Number.isInteger(msg.rows) || msg.rows < 1 || msg.rows > 200)) return;
+      if (msg.data !== undefined && typeof msg.data !== 'string') return;
 
+      try {
       switch (msg.type) {
         case 'attach': {
           const { sessionId, cols, rows } = msg;
@@ -1511,13 +1542,16 @@ export function createServer({ testMode = false } = {}) {
           // Send replay-done AFTER all data (buffer + pending) is sent
           safeSend(ws, JSON.stringify({ type: 'replay-done', sessionId }));
 
-          // Nudge Claude CLI to re-render by triggering a SIGWINCH via
-          // a tiny resize bounce. Ink (Claude's TUI) listens for this and
-          // repaints, restoring correct cursor position and visibility.
+          // Nudge the TUI CLI to re-render by triggering a SIGWINCH via
+          // a tiny resize bounce. Both Ink (Claude) and Codex listen for
+          // SIGWINCH and repaint, restoring correct cursor/visibility.
+          // Track the restore timer so a client resize cancels it.
           if (cols && rows && manager.isAlive(sessionId)) {
+            if (nudgeTimer) clearTimeout(nudgeTimer);
             const nudgeCols = Math.max(cols - 1, 1);
             manager.resize(sessionId, nudgeCols, rows);
-            setTimeout(() => {
+            nudgeTimer = setTimeout(() => {
+              nudgeTimer = null;
               manager.resize(sessionId, cols, rows);
             }, 50);
           }
@@ -1525,7 +1559,7 @@ export function createServer({ testMode = false } = {}) {
         }
 
         case 'input': {
-          if (attachedSessionId) {
+          if (attachedSessionId && msg.data) {
             manager.write(attachedSessionId, msg.data);
           }
           break;
@@ -1533,6 +1567,12 @@ export function createServer({ testMode = false } = {}) {
 
         case 'resize': {
           if (attachedSessionId && msg.cols && msg.rows) {
+            // Cancel any pending SIGWINCH nudge restore — the client is
+            // sending authoritative dimensions that supersede the nudge.
+            if (nudgeTimer) {
+              clearTimeout(nudgeTimer);
+              nudgeTimer = null;
+            }
             manager.resize(attachedSessionId, msg.cols, msg.rows);
           }
           break;
@@ -1547,15 +1587,8 @@ export function createServer({ testMode = false } = {}) {
           const project = store.getProject(session.projectId);
           if (!project) { console.log('[shell-attach] project not found'); break; }
 
-          // Detach previous shell listener (use dedicated tracking variable
-          // since attachedSessionId may already point to the new session)
-          if (attachedShellSessionId && shellDataListener) {
-            manager.offShellData(attachedShellSessionId, shellDataListener);
-            shellDataListener = null;
-          }
-          attachedShellSessionId = sessionId;
-
-          // Spawn shell if not already running
+          // Resolve worktree path BEFORE detaching the old listener so that
+          // on error the previous shell connection remains intact.
           if (!manager.isShellAlive(sessionId)) {
             let cwd = project.cwd;
             if (session.worktreePath) {
@@ -1567,10 +1600,28 @@ export function createServer({ testMode = false } = {}) {
                 break;
               }
             }
+
+            // Detach previous shell listener (use dedicated tracking variable
+            // since attachedSessionId may already point to the new session)
+            if (attachedShellSessionId && shellDataListener) {
+              manager.offShellData(attachedShellSessionId, shellDataListener);
+              shellDataListener = null;
+            }
+            attachedShellSessionId = sessionId;
+
             console.log('[shell-attach] spawning shell in:', cwd);
             manager.spawnShell(sessionId, { cwd, cols, rows });
-          } else if (cols && rows) {
-            manager.resizeShell(sessionId, cols, rows);
+          } else {
+            // Detach previous shell listener
+            if (attachedShellSessionId && shellDataListener) {
+              manager.offShellData(attachedShellSessionId, shellDataListener);
+              shellDataListener = null;
+            }
+            attachedShellSessionId = sessionId;
+
+            if (cols && rows) {
+              manager.resizeShell(sessionId, cols, rows);
+            }
           }
 
           // Install live listener with replay buffering (same pattern as attach)
@@ -1604,7 +1655,7 @@ export function createServer({ testMode = false } = {}) {
         }
 
         case 'shell-input': {
-          if (msg.sessionId) {
+          if (msg.sessionId && msg.data) {
             manager.writeShell(msg.sessionId, msg.data);
           }
           break;
@@ -1617,10 +1668,17 @@ export function createServer({ testMode = false } = {}) {
           break;
         }
       }
+      } catch (err) {
+        console.error('[ws] Unhandled error in message handler:', err);
+      }
     });
 
     ws.on('close', () => {
       clients.delete(ws);
+      if (nudgeTimer) {
+        clearTimeout(nudgeTimer);
+        nudgeTimer = null;
+      }
       if (attachedSessionId && dataListener) {
         manager.offData(attachedSessionId, dataListener);
       }

@@ -1,5 +1,9 @@
 * { margin: 0; padding: 0; box-sizing: border-box; }
 
+:root {
+  --tab-bar-height: 32px;
+}
+
 body {
   background: #1a1a2e;
   color: #e0e0e0;
@@ -779,7 +783,7 @@ body {
 /* --- Tab bar --- */
 
 #tab-bar {
-  height: 32px;
+  height: var(--tab-bar-height);
   background: #16213e;
   border-bottom: 1px solid #0f3460;
   display: none;
@@ -845,7 +849,7 @@ body {
 
 #file-viewer {
   position: absolute;
-  inset: 32px 0 0 0; /* below tab bar */
+  inset: var(--tab-bar-height) 0 0 0; /* below tab bar */
   display: flex;
   flex-direction: column;
   background: #1a1a2e;
@@ -1505,9 +1509,9 @@ body {
     margin: 16px;
   }
 
-  /* Tab bar: scrollable */
-  #tab-bar {
-    height: 36px;
+  /* Tab bar: taller on mobile */
+  :root {
+    --tab-bar-height: 36px;
   }
 
   .tab {
