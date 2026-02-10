@@ -86,6 +86,15 @@
   let activeRightPanelTab = 'files';
   let gitLogExpanded = false;
 
+  // Status bar refs
+  const statusBar = document.getElementById('status-bar');
+  const statusProvider = document.getElementById('status-provider');
+  const statusBranch = document.getElementById('status-branch');
+  const statusDuration = document.getElementById('status-duration');
+  const statusActivity = document.getElementById('status-activity');
+  const landingRecent = document.getElementById('landing-recent');
+  let statusDurationTimer = null;
+
   // --- Helpers ---
   function wsSend(data) {
     if (ws && ws.readyState === WebSocket.OPEN) {
@@ -112,6 +121,125 @@
     if (days < 30) return `${days}d ago`;
     const months = Math.floor(days / 30);
     return `${months}mo ago`;
+  }
+
+  // --- Status bar ---
+  function formatDuration(isoString) {
+    const diff = Date.now() - new Date(isoString).getTime();
+    const secs = Math.floor(diff / 1000);
+    if (secs < 60) return `${secs}s`;
+    const mins = Math.floor(secs / 60);
+    if (mins < 60) return `${mins}m ${secs % 60}s`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ${mins % 60}m`;
+    const days = Math.floor(hrs / 24);
+    return `${days}d ${hrs % 24}h`;
+  }
+
+  function updateStatusBar() {
+    if (!activeSessionId) {
+      statusBar.classList.add('hidden');
+      clearInterval(statusDurationTimer);
+      statusDurationTimer = null;
+      return;
+    }
+    const session = sessions.find(s => s.id === activeSessionId);
+    if (!session) {
+      statusBar.classList.add('hidden');
+      return;
+    }
+    statusBar.classList.remove('hidden');
+
+    // Provider
+    const provName = session.provider === 'codex' ? 'Codex' : 'Claude';
+    statusProvider.textContent = provName;
+
+    // Branch
+    statusBranch.textContent = session.branchName || 'no branch';
+
+    // Duration
+    statusDuration.textContent = formatDuration(session.createdAt);
+
+    // Activity
+    const idle = sessionIdleState.get(activeSessionId);
+    const alive = session.alive !== false;
+    let dotClass, label;
+    if (!alive) {
+      dotClass = 'exited';
+      label = 'Exited';
+    } else if (idle === false) {
+      dotClass = 'working';
+      label = 'Working...';
+    } else {
+      dotClass = 'idle';
+      label = 'Idle';
+    }
+    statusActivity.innerHTML =
+      `<span class="status-activity-dot ${dotClass}"></span> ${label}`;
+
+    // Adjust terminal wrapper bottom inset for status bar
+    const termWrapper = document.getElementById('terminal-wrapper');
+    if (termWrapper && termWrapper.style.display !== 'none') {
+      const tabH = getComputedStyle(document.documentElement)
+        .getPropertyValue('--tab-bar-height') || '32px';
+      termWrapper.style.inset = `${tabH} 0 24px 0`;
+    }
+
+    // Start duration timer if not running
+    if (!statusDurationTimer) {
+      statusDurationTimer = setInterval(() => {
+        const s = sessions.find(s2 => s2.id === activeSessionId);
+        if (s) statusDuration.textContent = formatDuration(s.createdAt);
+      }, 1000);
+    }
+  }
+
+  // --- Landing page ---
+  function renderLandingRecent() {
+    if (!landingRecent) return;
+    // Show up to 5 most recent sessions across all projects
+    const recentSessions = [...sessions]
+      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+      .slice(0, 5);
+
+    if (recentSessions.length === 0) {
+      landingRecent.innerHTML = '';
+      return;
+    }
+
+    const header = document.createElement('div');
+    header.className = 'landing-recent-header';
+    header.textContent = 'Recent Sessions';
+
+    const list = document.createElement('ul');
+    list.className = 'landing-recent-list';
+
+    for (const s of recentSessions) {
+      const li = document.createElement('li');
+      li.className = 'landing-recent-item';
+
+      const dot = document.createElement('span');
+      dot.className = `landing-recent-dot ${s.alive ? 'alive' : 'exited'}`;
+
+      const name = document.createElement('span');
+      name.className = 'landing-recent-name';
+      const project = projects.find(p => p.id === s.projectId);
+      name.textContent = (project ? project.name + ' / ' : '') + (s.name || 'Untitled');
+
+      const meta = document.createElement('span');
+      meta.className = 'landing-recent-meta';
+      meta.textContent = relativeTime(s.createdAt);
+
+      li.appendChild(dot);
+      li.appendChild(name);
+      li.appendChild(meta);
+      li.onclick = () => attachSession(s.id);
+      list.appendChild(li);
+    }
+
+    landingRecent.innerHTML = '';
+    landingRecent.appendChild(header);
+    landingRecent.appendChild(list);
   }
 
   // --- Toast notifications ---
@@ -502,6 +630,8 @@
             } catch {}
           }
           renderSidebar();
+          updateStatusBar();
+          if (!activeSessionId) renderLandingRecent();
           break;
 
         case 'session-deleted':
@@ -516,18 +646,22 @@
             fileViewer.classList.add('hidden');
             document.getElementById('terminal-wrapper').style.display = '';
             document.getElementById('terminal-wrapper').style.inset = '0';
+            updateStatusBar();
+            renderLandingRecent();
           }
           break;
 
         case 'exited':
           // Session still exists, just re-render sidebar to update status dot
           renderSidebar();
+          updateStatusBar();
           break;
 
         case 'session-idle': {
           const { sessionId, idle } = msg;
           sessionIdleState.set(sessionId, idle);
           updateStatusDot(sessionId, idle);
+          updateStatusBar();
           break;
         }
 
@@ -621,6 +755,7 @@
 
     term.focus();
     renderSidebar();
+    updateStatusBar();
   }
 
   function updateStatusDot(sessionId, idle) {
@@ -1456,7 +1591,8 @@
       // Show terminal, hide file viewer
       termWrapper.style.display = '';
       const tabH = getComputedStyle(document.documentElement).getPropertyValue('--tab-bar-height') || '32px';
-      termWrapper.style.inset = tabH + ' 0 0 0';
+      const bottomInset = statusBar && !statusBar.classList.contains('hidden') ? '24px' : '0';
+      termWrapper.style.inset = `${tabH} 0 ${bottomInset} 0`;
       fileViewer.classList.add('hidden');
       term.focus();
       // Refit terminal synchronously so term.cols/rows are correct before
@@ -1467,6 +1603,8 @@
       // Show file viewer, hide terminal
       termWrapper.style.display = 'none';
       fileViewer.classList.remove('hidden');
+      const bottomInset = statusBar && !statusBar.classList.contains('hidden') ? '24px' : '0';
+      fileViewer.style.inset = `var(--tab-bar-height) 0 ${bottomInset} 0`;
 
       const tab = openTabs.find(t => t.id === tabId);
       if (tab) {

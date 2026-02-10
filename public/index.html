@@ -38,7 +38,28 @@
         <div id="file-viewer-content"></div>
       </div>
       <div id="no-session">
-        <button id="btn-home-add-project" class="home-add-btn">Add Project</button>
+        <div class="landing-page">
+          <div class="landing-logo">&#10022;</div>
+          <h1 class="landing-title">Claude Console</h1>
+          <p class="landing-subtitle">Multi-session manager for Claude Code</p>
+          <div id="landing-recent" class="landing-recent"></div>
+          <button id="btn-home-add-project" class="home-add-btn">+ New Project</button>
+          <div class="landing-hints">
+            <span class="landing-hint">Click a session in the sidebar to resume</span>
+          </div>
+        </div>
+      </div>
+      <div id="status-bar" class="hidden">
+        <div class="status-bar-left">
+          <span id="status-provider" class="status-item status-provider-badge"></span>
+          <span class="status-sep">|</span>
+          <span id="status-branch" class="status-item"></span>
+          <span class="status-sep">|</span>
+          <span id="status-duration" class="status-item"></span>
+        </div>
+        <div class="status-bar-right">
+          <span id="status-activity" class="status-item"></span>
+        </div>
       </div>
     </main>
     <aside id="right-panel" class="hidden">

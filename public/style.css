@@ -310,16 +310,184 @@ body {
 }
 #no-session.hidden { display: none; }
 
-.home-add-btn {
-  padding: 16px 32px;
-  background: #343230;
-  color: #f0ebe3;
-  border: 2px dashed #3d3a36;
-  border-radius: 8px;
-  font-size: 16px;
-  cursor: pointer;
+/* --- Landing page --- */
+
+.landing-page {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 12px;
+  text-align: center;
+  max-width: 400px;
+  padding: 24px;
 }
-.home-add-btn:hover { border-color: #d97757; color: #d97757; }
+
+.landing-logo {
+  font-size: 48px;
+  color: #d97757;
+  line-height: 1;
+  margin-bottom: 4px;
+}
+
+.landing-title {
+  font-size: 22px;
+  font-weight: 600;
+  color: #f0ebe3;
+  letter-spacing: -0.01em;
+}
+
+.landing-subtitle {
+  font-size: 13px;
+  color: #8c8478;
+  margin-bottom: 8px;
+}
+
+.landing-recent {
+  width: 100%;
+}
+
+.landing-recent-header {
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8c8478;
+  margin-bottom: 6px;
+}
+
+.landing-recent-list {
+  list-style: none;
+  border: 1px solid #3d3a36;
+  border-radius: 6px;
+  overflow: hidden;
+  margin-bottom: 8px;
+}
+
+.landing-recent-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #e8dfd5;
+  border-bottom: 1px solid #3d3a3633;
+}
+.landing-recent-item:last-child { border-bottom: none; }
+.landing-recent-item:hover { background: #3d3a36; }
+
+.landing-recent-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+.landing-recent-dot.alive { background: #6ec95e; }
+.landing-recent-dot.exited { background: #8c8478; }
+
+.landing-recent-name {
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.landing-recent-meta {
+  font-size: 11px;
+  color: #8c8478;
+  flex-shrink: 0;
+}
+
+.home-add-btn {
+  padding: 10px 24px;
+  background: #d97757;
+  color: #fff;
+  border: none;
+  border-radius: 6px;
+  font-size: 13px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+.home-add-btn:hover { background: #c4653f; }
+
+.landing-hints {
+  margin-top: 8px;
+}
+
+.landing-hint {
+  font-size: 11px;
+  color: #8c8478;
+}
+
+/* --- Status bar --- */
+
+#status-bar {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  height: 24px;
+  background: #343230;
+  border-top: 1px solid #3d3a36;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 12px;
+  font-size: 11px;
+  z-index: 2;
+  flex-shrink: 0;
+}
+#status-bar.hidden { display: none; }
+
+.status-bar-left,
+.status-bar-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-item {
+  color: #8c8478;
+}
+
+.status-sep {
+  color: #3d3a36;
+  font-size: 10px;
+}
+
+.status-provider-badge {
+  color: #d97757;
+  font-weight: 600;
+}
+
+.status-activity {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.status-activity-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  display: inline-block;
+}
+.status-activity-dot.working {
+  background: #d97757;
+  animation: status-pulse 1.2s ease-in-out infinite;
+}
+.status-activity-dot.idle {
+  background: #8c8478;
+}
+.status-activity-dot.exited {
+  background: #d95555;
+}
+
+@keyframes status-pulse {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.3; }
+}
 
 /* --- Right panel (file tree + shell terminal) --- */
 
@@ -1562,8 +1730,19 @@ body {
 
   /* Home add button */
   .home-add-btn {
-    padding: 14px 24px;
-    font-size: 15px;
+    padding: 12px 20px;
+    font-size: 14px;
+  }
+
+  /* Landing page: compact on mobile */
+  .landing-logo {
+    font-size: 36px;
+  }
+  .landing-title {
+    font-size: 18px;
+  }
+  .landing-page {
+    max-width: 320px;
   }
 
   /* Git panel: file actions always visible on mobile */
