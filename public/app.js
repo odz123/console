@@ -888,12 +888,17 @@
       }
     };
 
+    const handleSelectKeydown = (e) => {
+      if (e.key === 'Escape') form.remove();
+    };
+
     input.onkeydown = handleKeydown;
-    providerSelect.onkeydown = handleKeydown;
-    modeSelect.onkeydown = handleKeydown;
+    providerSelect.onkeydown = handleSelectKeydown;
+    modeSelect.onkeydown = handleSelectKeydown;
     modelInput.onkeydown = handleKeydown;
 
-    const handleBlur = () => {
+    const handleBlur = (e) => {
+      if (e.relatedTarget && form.contains(e.relatedTarget)) return;
       setTimeout(() => {
         if (!form.contains(document.activeElement)) form.remove();
       }, 200);
