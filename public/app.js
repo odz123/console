@@ -88,9 +88,43 @@
   const fvSearchClose = document.getElementById('fv-search-close');
   let fvSearchMatches = [];
   let fvSearchCurrentIdx = -1;
+
+  // Find and Replace refs
+  const fvReplaceRow = document.getElementById('fv-replace-row');
+  const fvReplaceInput = document.getElementById('fv-replace-input');
+  const fvReplaceOne = document.getElementById('fv-replace-one');
+  const fvReplaceAll = document.getElementById('fv-replace-all');
+  const fvToggleReplace = document.getElementById('fv-search-toggle-replace');
+
+  // Quick file open refs
+  const quickOpenOverlay = document.getElementById('quick-open-overlay');
+  const quickOpenInput = document.getElementById('quick-open-input');
+  const quickOpenResults = document.getElementById('quick-open-results');
+
+  // File preview tooltip ref
+  const filePreviewTooltip = document.getElementById('file-preview-tooltip');
+
+  // File tree header button refs
+  const btnExpandAll = document.getElementById('btn-expand-all');
+  const btnCollapseAll = document.getElementById('btn-collapse-all');
   const btnToggleFileTree = document.getElementById('btn-toggle-file-tree');
   const btnRefreshFileTree = document.getElementById('btn-refresh-file-tree');
   const fileTreeSection = document.getElementById('file-tree-section');
+
+  // Recent files tracking
+  let recentFiles = [];
+  const MAX_RECENT_FILES = 20;
+  try {
+    const saved = localStorage.getItem('claude-console-recent-files');
+    if (saved) recentFiles = JSON.parse(saved);
+  } catch {}
+
+  // Session color labels
+  let sessionColors = {};
+  try {
+    const saved = localStorage.getItem('claude-console-session-colors');
+    if (saved) sessionColors = JSON.parse(saved);
+  } catch {}
 
   // Git panel refs
   const gitPanel = document.getElementById('git-panel');
@@ -1252,6 +1286,14 @@
           sessionIdleState.delete(s.id);
         }
 
+        // Color label indicator
+        if (sessionColors[s.id]) {
+          const colorDot = document.createElement('span');
+          colorDot.className = 'session-color-dot';
+          colorDot.style.background = sessionColors[s.id];
+          li.appendChild(colorDot);
+        }
+
         // Session info container (name + optional badges)
         const infoContainer = document.createElement('div');
         infoContainer.className = 'session-info';
@@ -1927,6 +1969,8 @@
         e.dataTransfer.setData('text/plain', filePath);
         e.dataTransfer.effectAllowed = 'copy';
       };
+      // File preview on hover
+      setupFilePreviewHover(row, filePath);
       container.appendChild(row);
     }
 
@@ -2371,6 +2415,8 @@
     if (tab) {
       openTabs.push(tab);
       switchTab(tab.id);
+      // Track in recent files
+      trackRecentFile(tab.fullPath);
       // Start watching for external changes
       if (tab.type === 'text' || tab.type === 'markdown') {
         startWatchingFile(tab.id, tab.fullPath);
@@ -2863,6 +2909,67 @@
   fvSearchNext.onclick = () => navigateFvSearch(1);
   fvSearchPrev.onclick = () => navigateFvSearch(-1);
   fvSearchClose.onclick = closeFvSearch;
+
+  // Toggle replace row
+  if (fvToggleReplace) {
+    fvToggleReplace.onclick = () => {
+      if (!fvReplaceRow) return;
+      const visible = !fvReplaceRow.classList.contains('hidden');
+      fvReplaceRow.classList.toggle('hidden', visible);
+      fvToggleReplace.classList.toggle('fv-toggle-replace-open', !visible);
+      if (!visible) fvReplaceInput.focus();
+    };
+  }
+
+  // Replace current match
+  if (fvReplaceOne) {
+    fvReplaceOne.onclick = () => {
+      const tab = openTabs.find(t => t.id === activeTabId);
+      if (!tab || !tab.content || fvSearchMatches.length === 0) return;
+      const searchText = fvSearchInput.value.trim();
+      const replaceText = fvReplaceInput.value;
+      if (!searchText) return;
+      // Replace one occurrence in content
+      const idx = findNthOccurrence(tab.content, searchText, fvSearchCurrentIdx);
+      if (idx >= 0) {
+        tab.content = tab.content.substring(0, idx) + replaceText + tab.content.substring(idx + searchText.length);
+        dirtyTabs.add(tab.id);
+        renderFileContent(tab);
+        renderTabs();
+        // Re-search to update highlights
+        performFvSearch(searchText);
+      }
+    };
+  }
+
+  // Replace all matches
+  if (fvReplaceAll) {
+    fvReplaceAll.onclick = () => {
+      const tab = openTabs.find(t => t.id === activeTabId);
+      if (!tab || !tab.content || fvSearchMatches.length === 0) return;
+      const searchText = fvSearchInput.value.trim();
+      const replaceText = fvReplaceInput.value;
+      if (!searchText) return;
+      const count = fvSearchMatches.length;
+      tab.content = tab.content.split(searchText).join(replaceText);
+      dirtyTabs.add(tab.id);
+      renderFileContent(tab);
+      renderTabs();
+      performFvSearch(searchText);
+      showToast(`Replaced ${count} occurrence${count !== 1 ? 's' : ''}`, 'success', 2000);
+    };
+  }
+
+  function findNthOccurrence(content, search, n) {
+    const lower = content.toLowerCase();
+    const q = search.toLowerCase();
+    let idx = -1;
+    for (let i = 0; i <= n; i++) {
+      idx = lower.indexOf(q, idx + 1);
+      if (idx < 0) return -1;
+    }
+    return idx;
+  }
 
   // --- Go to line ---
   function openGoToLine() {
@@ -3895,6 +4002,17 @@
       return;
     }
 
+    // Ctrl+P — quick file open
+    if (e.key === 'p' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+      e.preventDefault();
+      if (quickOpenOverlay && quickOpenOverlay.classList.contains('hidden')) {
+        openQuickOpen();
+      } else {
+        closeQuickOpen();
+      }
+      return;
+    }
+
     // Ctrl+K — command palette (works from anywhere)
     if (e.key === 'k' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -3946,6 +4064,11 @@
 
     // Esc — close overlays, stop Claude, or close terminal search
     if (e.key === 'Escape') {
+      if (quickOpenOverlay && !quickOpenOverlay.classList.contains('hidden')) {
+        closeQuickOpen();
+        e.stopPropagation();
+        return;
+      }
       if (!cpOverlay.classList.contains('hidden')) {
         closeCommandPalette();
         e.stopPropagation();
@@ -4030,6 +4153,9 @@
           const treeSection = document.getElementById('file-tree-section');
           if (treeSection) treeSection.focus();
         }},
+        { icon: '\u2610', label: 'Quick Open File', meta: 'Ctrl+P', action: () => { closeCommandPalette(); openQuickOpen(); } },
+        { icon: '\u25BD', label: 'Expand All Folders', meta: 'file tree', action: () => { closeCommandPalette(); if (btnExpandAll) btnExpandAll.click(); } },
+        { icon: '\u25B7', label: 'Collapse All Folders', meta: 'file tree', action: () => { closeCommandPalette(); if (btnCollapseAll) btnCollapseAll.click(); } },
       );
     }
 
@@ -5169,6 +5295,14 @@
         if (nameEl) startSessionRename(nameEl, session.id, session.name);
       }},
       { label: pinnedSessions.has(session.id) ? 'Unpin' : 'Pin to Top', action: () => togglePinSession(session.id) },
+      { label: 'Set Color Label', action: () => {
+        // Re-find the session element and show color picker near it
+        const li = projectListEl.querySelector(`li[data-session-id="${session.id}"]`);
+        if (li) {
+          const rect = li.getBoundingClientRect();
+          showSessionColorPicker({ stopPropagation: () => {}, target: li }, session.id);
+        }
+      }},
       { label: 'Clone', action: () => cloneSession(session.id) },
       { type: 'separator' },
       { label: 'Copy Session ID', action: () => {
@@ -5322,6 +5456,351 @@
       }
       if (tab.id === activeTabId) renderFileContent(tab);
     } catch { /* ignore */ }
+  }
+
+  // --- Ctrl+P Quick File Open ---
+  let quickOpenIdx = 0;
+  let quickOpenItems = [];
+
+  function openQuickOpen() {
+    if (!quickOpenOverlay || !activeSessionId) return;
+    quickOpenOverlay.classList.remove('hidden');
+    quickOpenInput.value = '';
+    quickOpenResults.innerHTML = '';
+    quickOpenIdx = 0;
+    quickOpenItems = [];
+    renderQuickOpenResults('');
+    quickOpenInput.focus();
+  }
+
+  function closeQuickOpen() {
+    if (!quickOpenOverlay) return;
+    quickOpenOverlay.classList.add('hidden');
+  }
+
+  function renderQuickOpenResults(query) {
+    const q = query.toLowerCase();
+    // Collect all files from file tree
+    const paths = collectAllFilePaths();
+    // Fuzzy filter
+    let items;
+    if (!q) {
+      // Show recent files first, then others
+      const recent = recentFiles.filter(f => paths.includes(f));
+      const others = paths.filter(f => !recent.includes(f)).slice(0, 15);
+      items = [...recent, ...others].slice(0, 20);
+    } else {
+      items = paths.filter(p => {
+        const name = p.split('/').pop().toLowerCase();
+        const full = p.toLowerCase();
+        return fuzzyMatch(q, name) || fuzzyMatch(q, full);
+      }).sort((a, b) => {
+        // Prioritize filename matches over path matches
+        const aName = a.split('/').pop().toLowerCase();
+        const bName = b.split('/').pop().toLowerCase();
+        const aScore = aName.startsWith(q) ? 0 : aName.includes(q) ? 1 : 2;
+        const bScore = bName.startsWith(q) ? 0 : bName.includes(q) ? 1 : 2;
+        return aScore - bScore;
+      }).slice(0, 20);
+    }
+
+    quickOpenItems = items;
+    quickOpenIdx = 0;
+    quickOpenResults.innerHTML = '';
+
+    if (items.length === 0) {
+      quickOpenResults.innerHTML = '<div class="quick-open-empty">No files found</div>';
+      return;
+    }
+
+    for (let i = 0; i < items.length; i++) {
+      const el = document.createElement('div');
+      el.className = 'quick-open-item' + (i === 0 ? ' active' : '');
+      const fname = items[i].split('/').pop();
+      const dir = items[i].includes('/') ? items[i].substring(0, items[i].lastIndexOf('/')) : '';
+      const isRecent = recentFiles.includes(items[i]);
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'quick-open-name';
+      nameSpan.textContent = fname;
+
+      const dirSpan = document.createElement('span');
+      dirSpan.className = 'quick-open-dir';
+      dirSpan.textContent = dir;
+
+      el.appendChild(nameSpan);
+      if (isRecent && !q) {
+        const badge = document.createElement('span');
+        badge.className = 'quick-open-recent-badge';
+        badge.textContent = 'recent';
+        el.appendChild(badge);
+      }
+      el.appendChild(dirSpan);
+
+      el.onmousedown = (e) => {
+        e.preventDefault();
+        selectQuickOpenItem(i);
+      };
+      el.onmouseenter = () => {
+        quickOpenIdx = i;
+        updateQuickOpenSelection();
+      };
+      quickOpenResults.appendChild(el);
+    }
+  }
+
+  function selectQuickOpenItem(idx) {
+    if (idx < 0 || idx >= quickOpenItems.length) return;
+    const filePath = quickOpenItems[idx];
+    const filename = filePath.split('/').pop();
+    closeQuickOpen();
+    openFileTab(filePath, filename);
+  }
+
+  function updateQuickOpenSelection() {
+    const items = quickOpenResults.querySelectorAll('.quick-open-item');
+    items.forEach((el, i) => el.classList.toggle('active', i === quickOpenIdx));
+  }
+
+  function fuzzyMatch(query, text) {
+    let qi = 0;
+    for (let i = 0; i < text.length && qi < query.length; i++) {
+      if (text[i] === query[qi]) qi++;
+    }
+    return qi === query.length;
+  }
+
+  if (quickOpenInput) {
+    quickOpenInput.oninput = debounce(() => {
+      renderQuickOpenResults(quickOpenInput.value.trim());
+    }, 100);
+
+    quickOpenInput.onkeydown = (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        quickOpenIdx = Math.min(quickOpenIdx + 1, quickOpenItems.length - 1);
+        updateQuickOpenSelection();
+        const items = quickOpenResults.querySelectorAll('.quick-open-item');
+        if (items[quickOpenIdx]) items[quickOpenIdx].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        quickOpenIdx = Math.max(quickOpenIdx - 1, 0);
+        updateQuickOpenSelection();
+        const items = quickOpenResults.querySelectorAll('.quick-open-item');
+        if (items[quickOpenIdx]) items[quickOpenIdx].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        selectQuickOpenItem(quickOpenIdx);
+      } else if (e.key === 'Escape') {
+        closeQuickOpen();
+      }
+    };
+  }
+
+  if (quickOpenOverlay) {
+    quickOpenOverlay.onclick = (e) => {
+      if (e.target === quickOpenOverlay) closeQuickOpen();
+    };
+  }
+
+  // --- Recent files tracking ---
+  function trackRecentFile(filePath) {
+    recentFiles = recentFiles.filter(f => f !== filePath);
+    recentFiles.unshift(filePath);
+    if (recentFiles.length > MAX_RECENT_FILES) recentFiles.pop();
+    try { localStorage.setItem('claude-console-recent-files', JSON.stringify(recentFiles)); } catch {}
+  }
+
+  // --- Session color labels ---
+  const SESSION_COLORS = [
+    { name: 'None', value: '' },
+    { name: 'Red', value: '#d95555' },
+    { name: 'Orange', value: '#d97757' },
+    { name: 'Yellow', value: '#d4b87a' },
+    { name: 'Green', value: '#7cba6a' },
+    { name: 'Blue', value: '#7aadca' },
+    { name: 'Purple', value: '#b07acc' },
+    { name: 'Pink', value: '#cc7aaa' },
+  ];
+
+  function setSessionColor(sessionId, color) {
+    if (!color) {
+      delete sessionColors[sessionId];
+    } else {
+      sessionColors[sessionId] = color;
+    }
+    try { localStorage.setItem('claude-console-session-colors', JSON.stringify(sessionColors)); } catch {}
+    renderSidebar();
+  }
+
+  function showSessionColorPicker(e, sessionId) {
+    e.stopPropagation();
+    // Remove existing picker
+    const existing = document.getElementById('session-color-picker');
+    if (existing) existing.remove();
+
+    const picker = document.createElement('div');
+    picker.id = 'session-color-picker';
+    picker.className = 'session-color-picker';
+
+    for (const c of SESSION_COLORS) {
+      const swatch = document.createElement('button');
+      swatch.className = 'color-swatch' + (sessionColors[sessionId] === c.value ? ' active' : '');
+      swatch.title = c.name;
+      if (c.value) {
+        swatch.style.background = c.value;
+      } else {
+        swatch.textContent = '\u00D7';
+        swatch.style.color = '#8c8478';
+        swatch.style.fontSize = '12px';
+      }
+      swatch.onclick = (ev) => {
+        ev.stopPropagation();
+        setSessionColor(sessionId, c.value);
+        picker.remove();
+      };
+      picker.appendChild(swatch);
+    }
+
+    // Position near the target
+    document.body.appendChild(picker);
+    const rect = e.target.getBoundingClientRect();
+    picker.style.top = (rect.bottom + 4) + 'px';
+    picker.style.left = rect.left + 'px';
+
+    const closePicker = (ev) => {
+      if (!picker.contains(ev.target)) {
+        picker.remove();
+        document.removeEventListener('mousedown', closePicker);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', closePicker), 0);
+  }
+
+  // --- Expand All / Collapse All file tree ---
+  if (btnExpandAll) {
+    btnExpandAll.onclick = async () => {
+      // Collect all directories in the tree and expand them
+      const allFolders = fileTreeEl.querySelectorAll('.file-tree-folder');
+      for (const folder of allFolders) {
+        const item = folder.parentElement;
+        if (!item) continue;
+        const children = item.querySelector('.file-tree-children');
+        const arrow = folder.querySelector('.file-tree-arrow');
+        if (children && !children.classList.contains('expanded')) {
+          // Get dirPath from the folder
+          const label = folder.querySelector('.file-tree-label');
+          if (!label) continue;
+          // Find the dir path by building from parents
+          let dirPath = buildDirPath(folder);
+          if (dirPath !== null) {
+            expandedDirs.add(dirPath);
+          }
+        }
+      }
+      // Re-render tree with all expanded
+      await renderFileTreeDir(fileTreeEl, '', 0);
+    };
+  }
+
+  if (btnCollapseAll) {
+    btnCollapseAll.onclick = () => {
+      expandedDirs.clear();
+      renderFileTreeDir(fileTreeEl, '', 0);
+    };
+  }
+
+  function buildDirPath(folderRow) {
+    // Walk the DOM to build the directory path from nested structure
+    const label = folderRow.querySelector('.file-tree-label');
+    if (!label) return null;
+    const name = label.textContent;
+
+    // Find parent folder rows
+    const parts = [name];
+    let el = folderRow.parentElement; // the item wrapper
+    while (el) {
+      const parentChildren = el.parentElement;
+      if (!parentChildren || !parentChildren.classList.contains('file-tree-children')) break;
+      const parentItem = parentChildren.parentElement;
+      if (!parentItem) break;
+      const parentRow = parentItem.querySelector(':scope > .file-tree-folder');
+      if (parentRow) {
+        const parentLabel = parentRow.querySelector('.file-tree-label');
+        if (parentLabel) parts.unshift(parentLabel.textContent);
+      }
+      el = parentItem;
+    }
+    return parts.join('/');
+  }
+
+  // --- File preview tooltip on hover ---
+  let previewHoverTimer = null;
+
+  function setupFilePreviewHover(row, filePath) {
+    row.addEventListener('mouseenter', () => {
+      if (previewHoverTimer) clearTimeout(previewHoverTimer);
+      previewHoverTimer = setTimeout(async () => {
+        await showFilePreview(filePath, row);
+      }, 600);
+    });
+
+    row.addEventListener('mouseleave', () => {
+      if (previewHoverTimer) { clearTimeout(previewHoverTimer); previewHoverTimer = null; }
+      hideFilePreview();
+    });
+  }
+
+  async function showFilePreview(filePath, anchorEl) {
+    if (!filePreviewTooltip || !activeSessionId) return;
+    const ext = filePath.split('.').pop().toLowerCase();
+    // Only preview text-like files
+    const textExts = new Set(['js','ts','jsx','tsx','py','rb','go','rs','java','c','cpp','h','css','html','json','yaml','yml','toml','md','txt','sh','bash','sql','xml','vue','svelte','cfg','ini','env','gitignore','dockerignore']);
+    if (!textExts.has(ext)) return;
+
+    try {
+      const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(filePath)}`);
+      if (!res.ok) return;
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('text/plain')) return;
+      const content = await res.text();
+
+      // Show first 8 lines
+      const lines = content.split('\n').slice(0, 8);
+      const preview = lines.join('\n');
+      const lineCount = content.split('\n').length;
+
+      filePreviewTooltip.innerHTML = '';
+      const header = document.createElement('div');
+      header.className = 'file-preview-header';
+      header.textContent = `${filePath} (${lineCount} lines)`;
+      const pre = document.createElement('pre');
+      pre.className = 'file-preview-content';
+      pre.textContent = preview;
+      if (content.split('\n').length > 8) {
+        pre.textContent += '\n...';
+      }
+      filePreviewTooltip.appendChild(header);
+      filePreviewTooltip.appendChild(pre);
+
+      // Position tooltip near the anchor
+      const rect = anchorEl.getBoundingClientRect();
+      filePreviewTooltip.style.top = (rect.top) + 'px';
+      filePreviewTooltip.style.left = (rect.right + 8) + 'px';
+      // Clamp to viewport
+      filePreviewTooltip.classList.remove('hidden');
+      const ttRect = filePreviewTooltip.getBoundingClientRect();
+      if (ttRect.bottom > window.innerHeight) {
+        filePreviewTooltip.style.top = Math.max(0, window.innerHeight - ttRect.height - 8) + 'px';
+      }
+      if (ttRect.right > window.innerWidth) {
+        filePreviewTooltip.style.left = (rect.left - ttRect.width - 8) + 'px';
+      }
+    } catch { /* ignore */ }
+  }
+
+  function hideFilePreview() {
+    if (filePreviewTooltip) filePreviewTooltip.classList.add('hidden');
   }
 
   // --- Init ---

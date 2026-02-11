@@ -60,6 +60,12 @@
           <button id="fv-search-prev" class="fv-search-btn" title="Previous">&uarr;</button>
           <button id="fv-search-next" class="fv-search-btn" title="Next">&darr;</button>
           <button id="fv-search-close" class="fv-search-btn" title="Close">&times;</button>
+          <div id="fv-replace-row" class="fv-replace-row hidden">
+            <input id="fv-replace-input" type="text" placeholder="Replace with..." autocomplete="off">
+            <button id="fv-replace-one" class="fv-search-btn" title="Replace">Replace</button>
+            <button id="fv-replace-all" class="fv-search-btn" title="Replace All">All</button>
+          </div>
+          <button id="fv-search-toggle-replace" class="fv-search-btn fv-toggle-replace" title="Toggle Replace">&darr;</button>
         </div>
         <div id="file-viewer-content"></div>
       </div>
@@ -118,6 +124,8 @@
             <button class="rp-tab" data-rp-tab="git">Git</button>
           </div>
           <span id="right-panel-path"></span>
+          <button id="btn-expand-all" class="panel-toggle" title="Expand all folders">&#x25BD;</button>
+          <button id="btn-collapse-all" class="panel-toggle" title="Collapse all folders">&#x25B7;</button>
           <button id="btn-refresh-file-tree" class="panel-toggle" title="Refresh file tree">&#x21BB;</button>
           <button id="btn-toggle-file-tree" class="panel-toggle" title="Collapse file tree">&#x25BC;</button>
         </div>
@@ -196,6 +204,17 @@
     </div>
   </div>
 
+  <!-- Quick file open (Ctrl+P) -->
+  <div id="quick-open-overlay" class="quick-open-overlay hidden">
+    <div class="quick-open-panel">
+      <input id="quick-open-input" type="text" placeholder="Go to file..." autocomplete="off">
+      <div id="quick-open-results" class="quick-open-results"></div>
+    </div>
+  </div>
+
+  <!-- File preview tooltip -->
+  <div id="file-preview-tooltip" class="file-preview-tooltip hidden"></div>
+
   <!-- Scroll to bottom button with line count -->
   <button id="scroll-to-bottom" class="scroll-to-bottom hidden" title="Scroll to bottom">
     <span id="scroll-line-count" class="scroll-line-count"></span>
@@ -237,9 +256,10 @@
         <div class="shortcuts-section">
           <h3>Navigation</h3>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>K</kbd><span>Command palette</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>P</kbd><span>Quick open file</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Tab</kbd><span>Cycle tabs</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
-          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find in file</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find (and replace) in file</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>G</kbd><span>Go to line</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>B</kbd><span>Toggle sidebar</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Focus mode</span></div>
