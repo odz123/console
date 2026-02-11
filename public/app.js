@@ -174,6 +174,21 @@
   const splitEditorDivider = document.getElementById('split-editor-divider');
   const fvSplitViewBtn = document.getElementById('fv-split-view');
 
+  // Outline panel ref
+  const outlinePanel = document.getElementById('outline-panel');
+  const outlineList = document.getElementById('outline-list');
+
+  // Token count ref
+  const promptTokenCount = document.getElementById('prompt-token-count');
+
+  // File comparison refs
+  const fileCompareOverlay = document.getElementById('file-compare-overlay');
+  const fileCompareInput = document.getElementById('file-compare-input');
+  const fileCompareResults = document.getElementById('file-compare-results');
+
+  // Go to definition tooltip
+  const gotoDefTooltip = document.getElementById('goto-def-tooltip');
+
   // File tree header button refs
   const btnExpandAll = document.getElementById('btn-expand-all');
   const btnCollapseAll = document.getElementById('btn-collapse-all');
@@ -2428,6 +2443,7 @@
       { label: 'Close All Unpinned', action: () => closeAllTabs() },
       { type: 'separator' },
       { label: 'Open in Split View', action: () => openSplitView(tab) },
+      { label: 'Compare with\u2026', action: () => openFileCompare(tab) },
       { label: 'Copy Path', action: () => { navigator.clipboard.writeText(tab.fullPath).catch(() => {}); showToast('Path copied', 'info', 2000); } },
     ];
 
@@ -2797,8 +2813,14 @@
       renderLineTextWithLinks(text, lineContent);
       // Double-click to highlight all matching words
       text.addEventListener('dblclick', (e) => handleWordDoubleClick(e));
-      // Click for bracket matching
-      text.addEventListener('click', (e) => handleBracketMatch(e, i, lines));
+      // Click for bracket matching, or Ctrl+click for go-to-definition
+      text.addEventListener('click', (e) => {
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey) {
+          handleGoToDefinition(e, lines);
+        } else {
+          handleBracketMatch(e, i, lines);
+        }
+      });
       row.appendChild(num);
       row.appendChild(text);
       table.appendChild(row);
@@ -3003,6 +3025,27 @@
       renderTabs(); // update dirty indicator on tab
       // Auto-save after delay
       scheduleAutoSave(tab, textarea);
+    };
+    // Editor keyboard shortcuts
+    textarea.onkeydown = (e) => {
+      // Ctrl+D: select next occurrence
+      if (e.key === 'd' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+        e.preventDefault();
+        selectNextOccurrence(textarea);
+        return;
+      }
+      // Alt+Shift+Up: copy line up
+      if (e.key === 'ArrowUp' && e.altKey && e.shiftKey) {
+        e.preventDefault();
+        copyLineInEditor(textarea, -1);
+        return;
+      }
+      // Alt+Shift+Down: copy line down
+      if (e.key === 'ArrowDown' && e.altKey && e.shiftKey) {
+        e.preventDefault();
+        copyLineInEditor(textarea, 1);
+        return;
+      }
     };
     fileViewerContent.appendChild(textarea);
     textarea.focus();
@@ -3327,6 +3370,7 @@
       fileTreeEl.classList.remove('hidden');
       gitPanel.classList.add('hidden');
       if (cmdHistoryPanel) cmdHistoryPanel.classList.add('hidden');
+      if (outlinePanel) outlinePanel.classList.add('hidden');
       btnRefreshFileTree.style.display = '';
       btnToggleFileTree.style.display = '';
       if (btnExpandAll) btnExpandAll.style.display = '';
@@ -3336,6 +3380,7 @@
       fileTreeEl.classList.add('hidden');
       gitPanel.classList.remove('hidden');
       if (cmdHistoryPanel) cmdHistoryPanel.classList.add('hidden');
+      if (outlinePanel) outlinePanel.classList.add('hidden');
       btnRefreshFileTree.style.display = 'none';
       btnToggleFileTree.style.display = 'none';
       if (btnExpandAll) btnExpandAll.style.display = 'none';
@@ -3343,10 +3388,22 @@
       if (searchBox) searchBox.style.display = 'none';
       setGitTabBadge(false);
       refreshGitStatus();
+    } else if (tab === 'outline') {
+      fileTreeEl.classList.add('hidden');
+      gitPanel.classList.add('hidden');
+      if (cmdHistoryPanel) cmdHistoryPanel.classList.add('hidden');
+      if (outlinePanel) outlinePanel.classList.remove('hidden');
+      btnRefreshFileTree.style.display = 'none';
+      btnToggleFileTree.style.display = 'none';
+      if (btnExpandAll) btnExpandAll.style.display = 'none';
+      if (btnCollapseAll) btnCollapseAll.style.display = 'none';
+      if (searchBox) searchBox.style.display = 'none';
+      renderOutlinePanel();
     } else if (tab === 'history') {
       fileTreeEl.classList.add('hidden');
       gitPanel.classList.add('hidden');
       if (cmdHistoryPanel) cmdHistoryPanel.classList.remove('hidden');
+      if (outlinePanel) outlinePanel.classList.add('hidden');
       btnRefreshFileTree.style.display = 'none';
       btnToggleFileTree.style.display = 'none';
       if (btnExpandAll) btnExpandAll.style.display = 'none';
@@ -4093,6 +4150,8 @@
         termWrapper.style.inset = `${getTopInset()} 0 ${getPromptBottomInset()} 0`;
         if (fitAddon) fitAddon.fit();
       }
+      // Update token count estimate
+      updateTokenCount(promptInput.value);
     };
 
     promptInput.onkeydown = (e) => {
@@ -4500,6 +4559,11 @@
         { icon: '\u25A3', label: 'Toggle Focus Mode', meta: 'Ctrl+\\', action: () => { closeCommandPalette(); toggleFocusMode(); } },
         { icon: '\u2B1A', label: 'Toggle Zen Mode', meta: 'Ctrl+Shift+Z', action: () => { closeCommandPalette(); toggleZenMode(); } },
         { icon: '\u26A0', label: 'Toggle Problems Panel', meta: 'errors/warnings', action: () => { closeCommandPalette(); toggleProblemsPanel(); } },
+        { icon: '\u2261', label: 'Show Outline', meta: 'symbols', action: () => {
+          closeCommandPalette();
+          const outTab = rightPanelTabs.querySelector('[data-rp-tab="outline"]');
+          if (outTab) outTab.click();
+        }},
         { icon: '\u2717', label: 'Close All Tabs', meta: 'action', action: () => { closeCommandPalette(); closeAllTabs(); } },
         { icon: '\u25CB', label: 'Toggle Theme', meta: 'light/dark', action: () => { closeCommandPalette(); toggleTheme(); } },
         { icon: '\u21E9', label: 'Export Session Output', meta: 'download .txt', action: () => { closeCommandPalette(); exportSessionOutput(); } },
@@ -7595,6 +7659,328 @@
 
   if (statusProblems) statusProblems.onclick = toggleProblemsPanel;
   if (problemsPanelClose) problemsPanelClose.onclick = () => problemsPanel.classList.add('hidden');
+
+  // --- Outline/Structure panel ---
+
+  function renderOutlinePanel() {
+    if (!outlineList) return;
+    outlineList.innerHTML = '';
+
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || !tab.content || typeof tab.content !== 'string') {
+      outlineList.innerHTML = '<div class="outline-empty">No file open or no symbols found</div>';
+      return;
+    }
+
+    const symbols = parseSymbols(tab.content);
+    if (symbols.length === 0) {
+      outlineList.innerHTML = '<div class="outline-empty">No symbols found</div>';
+      return;
+    }
+
+    for (const sym of symbols) {
+      const item = document.createElement('div');
+      item.className = 'outline-item';
+
+      const icon = document.createElement('span');
+      icon.className = 'symbol-icon symbol-kind-' + sym.kind;
+      icon.textContent = SYMBOL_ICONS[sym.kind] || '?';
+
+      const name = document.createElement('span');
+      name.className = 'outline-name';
+      name.textContent = sym.name;
+
+      const line = document.createElement('span');
+      line.className = 'outline-line';
+      line.textContent = ':' + sym.line;
+
+      const kind = document.createElement('span');
+      kind.className = 'outline-kind';
+      kind.textContent = sym.kind;
+
+      item.appendChild(icon);
+      item.appendChild(name);
+      item.appendChild(line);
+      item.appendChild(kind);
+
+      item.onclick = () => {
+        switchTab(tab.id);
+        setTimeout(() => goToLine(sym.line), 100);
+      };
+
+      outlineList.appendChild(item);
+    }
+  }
+
+  // --- Ctrl+D select next occurrence in editor ---
+
+  function selectNextOccurrence(textarea) {
+    const text = textarea.value;
+    const start = textarea.selectionStart;
+    const end = textarea.selectionEnd;
+
+    // If nothing selected, select the current word
+    if (start === end) {
+      const before = text.slice(0, start);
+      const after = text.slice(start);
+      const wordStart = before.search(/\w+$/);
+      const wordEnd = after.search(/\W/);
+      if (wordStart >= 0) {
+        const ws = wordStart;
+        const we = wordEnd >= 0 ? start + wordEnd : text.length;
+        textarea.setSelectionRange(ws, we);
+      }
+      return;
+    }
+
+    // Find the next occurrence of selected text
+    const selected = text.slice(start, end);
+    const searchFrom = end;
+    let idx = text.indexOf(selected, searchFrom);
+    if (idx === -1) {
+      // Wrap around
+      idx = text.indexOf(selected);
+    }
+    if (idx >= 0 && idx !== start) {
+      textarea.setSelectionRange(idx, idx + selected.length);
+      // Scroll to make selection visible
+      textarea.blur();
+      textarea.focus();
+    }
+  }
+
+  // --- Alt+Shift+Up/Down copy line in editor ---
+
+  function copyLineInEditor(textarea, dir) {
+    const text = textarea.value;
+    const start = textarea.selectionStart;
+
+    // Find current line boundaries
+    const lineStart = text.lastIndexOf('\n', start - 1) + 1;
+    let lineEnd = text.indexOf('\n', start);
+    if (lineEnd === -1) lineEnd = text.length;
+
+    const line = text.slice(lineStart, lineEnd);
+
+    let newText, newPos;
+    if (dir < 0) {
+      // Copy line above
+      newText = text.slice(0, lineStart) + line + '\n' + text.slice(lineStart);
+      newPos = start; // keep cursor at same position
+    } else {
+      // Copy line below
+      newText = text.slice(0, lineEnd) + '\n' + line + text.slice(lineEnd);
+      newPos = start + line.length + 1;
+    }
+
+    textarea.value = newText;
+    textarea.setSelectionRange(newPos, newPos);
+    // Trigger input event to update dirty state
+    textarea.dispatchEvent(new Event('input'));
+  }
+
+  // --- Token count estimator ---
+
+  function estimateTokens(text) {
+    if (!text) return 0;
+    // Rough approximation: ~4 chars per token for English, ~3 for code
+    // This is a simple heuristic, not exact
+    const words = text.trim().split(/\s+/).filter(Boolean).length;
+    const chars = text.length;
+    return Math.ceil(Math.max(words * 1.3, chars / 4));
+  }
+
+  function updateTokenCount(text) {
+    if (!promptTokenCount) return;
+    if (!text || text.trim().length === 0) {
+      promptTokenCount.classList.add('hidden');
+      return;
+    }
+    const tokens = estimateTokens(text);
+    promptTokenCount.textContent = '~' + tokens + ' tok';
+    promptTokenCount.classList.remove('hidden');
+  }
+
+  // --- Ctrl+click Go to Definition ---
+
+  function handleGoToDefinition(e, lines) {
+    e.preventDefault();
+    e.stopPropagation();
+
+    // Get the word under cursor
+    const sel = window.getSelection();
+    if (!sel.focusNode || sel.focusNode.nodeType !== Node.TEXT_NODE) return;
+
+    const textContent = sel.focusNode.textContent;
+    const offset = sel.focusOffset;
+
+    // Extract the word at cursor position
+    const before = textContent.slice(0, offset);
+    const after = textContent.slice(offset);
+    const wordStartMatch = before.match(/\w+$/);
+    const wordEndMatch = after.match(/^\w+/);
+    if (!wordStartMatch && !wordEndMatch) return;
+    const word = (wordStartMatch ? wordStartMatch[0] : '') + (wordEndMatch ? wordEndMatch[0] : '');
+    if (!word || word.length < 2) return;
+
+    // Search for definition in current file
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || !tab.content) return;
+
+    const defPatterns = [
+      new RegExp('^\\s*(?:export\\s+)?(?:async\\s+)?function\\s+' + word + '\\b'),
+      new RegExp('^\\s*(?:export\\s+)?class\\s+' + word + '\\b'),
+      new RegExp('^\\s*(?:const|let|var)\\s+' + word + '\\s*='),
+      new RegExp('^\\s*def\\s+' + word + '\\s*\\('),
+      new RegExp('^\\s*(?:pub\\s+)?(?:async\\s+)?fn\\s+' + word + '\\b'),
+      new RegExp('^\\s*func\\s+' + word + '\\b'),
+      new RegExp('^\\s*(?:export\\s+)?(?:interface|type|enum)\\s+' + word + '\\b'),
+    ];
+
+    for (let i = 0; i < lines.length; i++) {
+      for (const pat of defPatterns) {
+        if (pat.test(lines[i])) {
+          goToLine(i + 1);
+          showToast(`Jumped to definition of "${word}" at line ${i + 1}`, 'info', 2000);
+          return;
+        }
+      }
+    }
+
+    // Not found in current file — show tooltip
+    showToast(`No definition found for "${word}" in current file`, 'info', 2000);
+  }
+
+  // --- File comparison ---
+
+  let fileCompareSource = null;
+  let fileCompareSelectedIdx = 0;
+
+  function openFileCompare(tab) {
+    if (!fileCompareOverlay) return;
+    fileCompareSource = tab;
+    fileCompareOverlay.classList.remove('hidden');
+    fileCompareInput.value = '';
+    fileCompareResults.innerHTML = '';
+    fileCompareSelectedIdx = 0;
+    fileCompareInput.focus();
+
+    // Show all other open tabs as options
+    renderFileCompareResults('');
+
+    fileCompareInput.oninput = () => {
+      renderFileCompareResults(fileCompareInput.value);
+    };
+
+    fileCompareInput.onkeydown = (e) => {
+      if (e.key === 'Escape') {
+        closeFileCompare();
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        moveFileCompareSelection(1);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveFileCompareSelection(-1);
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const active = fileCompareResults.querySelector('.quick-open-item.active');
+        if (active) active.click();
+        return;
+      }
+    };
+
+    fileCompareOverlay.onclick = (e) => {
+      if (e.target === fileCompareOverlay) closeFileCompare();
+    };
+  }
+
+  function renderFileCompareResults(filter) {
+    fileCompareResults.innerHTML = '';
+    fileCompareSelectedIdx = 0;
+    const q = filter.toLowerCase();
+
+    const candidates = openTabs.filter(t =>
+      t.id !== fileCompareSource?.id &&
+      t.content && typeof t.content === 'string' &&
+      (!q || t.filename.toLowerCase().includes(q) || t.fullPath.toLowerCase().includes(q))
+    );
+
+    if (candidates.length === 0) {
+      fileCompareResults.innerHTML = '<div class="quick-open-empty">No other text files open to compare</div>';
+      return;
+    }
+
+    candidates.slice(0, 20).forEach((tab, idx) => {
+      const item = document.createElement('div');
+      item.className = 'quick-open-item' + (idx === 0 ? ' active' : '');
+      const nameEl = document.createElement('span');
+      nameEl.className = 'quick-open-name';
+      nameEl.textContent = tab.filename;
+      const pathEl = document.createElement('span');
+      pathEl.className = 'quick-open-path';
+      pathEl.textContent = tab.fullPath;
+      item.appendChild(nameEl);
+      item.appendChild(pathEl);
+      item.onclick = () => {
+        closeFileCompare();
+        showFileComparison(fileCompareSource, tab);
+      };
+      fileCompareResults.appendChild(item);
+    });
+  }
+
+  function moveFileCompareSelection(dir) {
+    const items = fileCompareResults.querySelectorAll('.quick-open-item');
+    if (items.length === 0) return;
+    items[fileCompareSelectedIdx]?.classList.remove('active');
+    fileCompareSelectedIdx = Math.max(0, Math.min(items.length - 1, fileCompareSelectedIdx + dir));
+    items[fileCompareSelectedIdx]?.classList.add('active');
+    items[fileCompareSelectedIdx]?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function closeFileCompare() {
+    if (fileCompareOverlay) fileCompareOverlay.classList.add('hidden');
+    fileCompareSource = null;
+  }
+
+  function showFileComparison(tabA, tabB) {
+    if (!tabA || !tabB) return;
+    // Use split editor to show both files
+    splitLeftTab = null;
+    splitRightTab = null;
+
+    // Render both panes
+    openSplitView(tabA);
+    openSplitView(tabB);
+
+    // Add diff highlighting
+    highlightSplitDifferences(tabA.content, tabB.content);
+  }
+
+  function highlightSplitDifferences(textA, textB) {
+    if (!splitLeftContent || !splitRightContent) return;
+    const linesA = textA.split('\n');
+    const linesB = textB.split('\n');
+    const maxLen = Math.max(linesA.length, linesB.length);
+
+    const leftRows = splitLeftContent.querySelectorAll('.line-row');
+    const rightRows = splitRightContent.querySelectorAll('.line-row');
+
+    for (let i = 0; i < maxLen; i++) {
+      const a = linesA[i] || '';
+      const b = linesB[i] || '';
+      if (a !== b) {
+        if (leftRows[i]) leftRows[i].classList.add('compare-diff');
+        if (rightRows[i]) rightRows[i].classList.add('compare-diff');
+      }
+    }
+  }
 
   // --- Init ---
   initTerminal();

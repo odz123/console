@@ -4992,6 +4992,136 @@ body.light-theme .problems-msg {
   color: #5a5347;
 }
 
+/* --- Outline panel --- */
+
+.outline-panel {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.outline-panel.hidden {
+  display: none;
+}
+
+.outline-list {
+  padding: 4px 0;
+}
+
+.outline-empty {
+  color: #8c8478;
+  text-align: center;
+  padding: 20px;
+  font-size: 13px;
+}
+
+.outline-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 12px;
+  cursor: pointer;
+  font-size: 12px;
+  color: #c5bdb3;
+}
+
+.outline-item:hover {
+  background: rgba(217, 119, 87, 0.1);
+}
+
+.outline-name {
+  font-weight: 600;
+  color: #e8dfd5;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.outline-line {
+  color: #8c8478;
+  font-size: 11px;
+  flex-shrink: 0;
+}
+
+.outline-kind {
+  color: #8c8478;
+  font-size: 10px;
+  text-transform: uppercase;
+  flex-shrink: 0;
+}
+
+/* --- Token count estimator --- */
+
+.prompt-token-count {
+  font-size: 11px;
+  color: #8c8478;
+  padding: 0 8px;
+  white-space: nowrap;
+  flex-shrink: 0;
+  align-self: center;
+}
+
+.prompt-token-count.hidden {
+  display: none;
+}
+
+/* --- Go to definition tooltip --- */
+
+.goto-def-tooltip {
+  position: fixed;
+  z-index: 2500;
+  background: #343230;
+  border: 1px solid #3d3a36;
+  border-radius: 4px;
+  padding: 4px 10px;
+  font-size: 12px;
+  color: #c5bdb3;
+  box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+  pointer-events: none;
+}
+
+.goto-def-tooltip.hidden {
+  display: none;
+}
+
+/* --- File comparison diff highlighting --- */
+
+.line-row.compare-diff {
+  background: rgba(217, 167, 87, 0.1) !important;
+}
+
+.line-row.compare-diff .line-num {
+  color: #d9a757;
+}
+
+/* --- Light theme for batch 8 --- */
+
+body.light-theme .outline-item:hover {
+  background: rgba(217, 119, 87, 0.06);
+}
+
+body.light-theme .outline-name {
+  color: #3d3a36;
+}
+
+body.light-theme .prompt-token-count {
+  color: #a09888;
+}
+
+body.light-theme .goto-def-tooltip {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+  color: #5a5347;
+}
+
+body.light-theme .line-row.compare-diff {
+  background: rgba(217, 167, 87, 0.08) !important;
+}
+
+body.light-theme .line-row.compare-diff .line-num {
+  color: #b08930;
+}
+
 /* --- Mobile header (hidden on desktop) --- */
 
 #mobile-header {

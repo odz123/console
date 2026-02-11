@@ -92,6 +92,7 @@
       <div id="prompt-bar" class="prompt-bar hidden">
         <div class="prompt-bar-inner">
           <textarea id="prompt-input" class="prompt-input" rows="1" placeholder="Type a message... (@ to mention files)" autocomplete="off"></textarea>
+          <span id="prompt-token-count" class="prompt-token-count hidden" title="Estimated token count"></span>
           <button id="prompt-send" class="prompt-send" title="Send (Enter)">Send</button>
         </div>
         <div id="prompt-image-previews" class="prompt-image-previews hidden"></div>
@@ -135,6 +136,7 @@
           <div id="right-panel-tabs">
             <button class="rp-tab active" data-rp-tab="files">Files</button>
             <button class="rp-tab" data-rp-tab="git">Git</button>
+            <button class="rp-tab" data-rp-tab="outline">Outline</button>
             <button class="rp-tab" data-rp-tab="history">History</button>
           </div>
           <span id="right-panel-path"></span>
@@ -170,6 +172,9 @@
             </div>
             <div id="git-log-list" class="git-log-list"></div>
           </div>
+        </div>
+        <div id="outline-panel" class="outline-panel hidden">
+          <div id="outline-list" class="outline-list"></div>
         </div>
         <div id="cmd-history-panel" class="cmd-history-panel hidden">
           <div class="cmd-history-header">
@@ -273,6 +278,17 @@
     </div>
   </div>
 
+  <!-- File comparison overlay -->
+  <div id="file-compare-overlay" class="quick-open-overlay hidden">
+    <div class="quick-open-panel">
+      <input id="file-compare-input" type="text" placeholder="Select second file to compare..." autocomplete="off">
+      <div id="file-compare-results" class="quick-open-results"></div>
+    </div>
+  </div>
+
+  <!-- Go to definition tooltip -->
+  <div id="goto-def-tooltip" class="goto-def-tooltip hidden"></div>
+
   <!-- Tab preview tooltip -->
   <div id="tab-preview-tooltip" class="tab-preview-tooltip hidden"></div>
 
@@ -360,6 +376,12 @@
           <div class="shortcut-row"><kbd>@</kbd> in prompt<span>File mention autocomplete</span></div>
           <div class="shortcut-row"><kbd>&uarr;</kbd>/<kbd>&darr;</kbd> in prompt<span>Prompt history</span></div>
           <div class="shortcut-row">Prompt bar<span>Paste images, drag files</span></div>
+        </div>
+        <div class="shortcuts-section">
+          <h3>Editor</h3>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>D</kbd><span>Select next occurrence</span></div>
+          <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Shift</kbd>+<kbd>&uarr;</kbd>/<kbd>&darr;</kbd><span>Copy line up / down</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Click</kbd><span>Go to definition</span></div>
         </div>
         <div class="shortcuts-section">
           <h3>Tabs</h3>
