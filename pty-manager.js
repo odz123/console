@@ -13,15 +13,22 @@ class PtyProcess extends EventEmitter {
     this.alive = true;
     this.idle = false;
     this.idleTimer = null;
+    this._idleSuppressedUntil = 0;
 
     this._scheduleIdleCheck();
 
     this._onPtyData = (data) => {
-      if (this.idle) {
-        this.idle = false;
-        this.emit('idle-change', false);
+      // During idle suppression (e.g. SIGWINCH nudge), buffer data and emit
+      // to listeners but don't toggle the idle state — the TUI redraw output
+      // is cosmetic and doesn't indicate real activity.
+      const suppressed = Date.now() < this._idleSuppressedUntil;
+      if (!suppressed) {
+        if (this.idle) {
+          this.idle = false;
+          this.emit('idle-change', false);
+        }
+        this._scheduleIdleCheck();
       }
-      this._scheduleIdleCheck();
       this._pushToBuffer(data);
       this.emit('data', data);
     };
@@ -85,6 +92,15 @@ class PtyProcess extends EventEmitter {
     if (this.alive) {
       this.pty.resize(cols, rows);
     }
+  }
+
+  /**
+   * Temporarily suppress idle-change events for the given duration (ms).
+   * Used during SIGWINCH resize nudge to prevent TUI redraw output from
+   * falsely triggering a working → idle cycle.
+   */
+  suppressIdleChange(durationMs) {
+    this._idleSuppressedUntil = Date.now() + durationMs;
   }
 
   kill() {
@@ -237,6 +253,11 @@ export class PtyManager {
   offIdleChange(sessionId, callback) {
     const proc = this.processes.get(sessionId);
     if (proc) proc.off('idle-change', callback);
+  }
+
+  suppressIdleChange(sessionId, durationMs) {
+    const proc = this.processes.get(sessionId);
+    if (proc) proc.suppressIdleChange(durationMs);
   }
 
   destroyAll() {

@@ -70,11 +70,13 @@
   const fileViewerRefresh = document.getElementById('file-viewer-refresh');
   const fileViewerWrap = document.getElementById('file-viewer-wrap');
   const fileViewerCopy = document.getElementById('file-viewer-copy');
+  const fileViewerDownload = document.getElementById('file-viewer-download');
   const fileViewerSplit = document.getElementById('file-viewer-split');
   const fileViewerEdit = document.getElementById('file-viewer-edit');
   const fileViewerSave = document.getElementById('file-viewer-save');
   const fileViewerCancelEdit = document.getElementById('file-viewer-cancel-edit');
   const fileViewerContent = document.getElementById('file-viewer-content');
+  const fileViewerInfo = document.getElementById('file-viewer-info');
   let fileViewerWordWrap = false;
   let fileViewerEditing = false;
   let diffSplitMode = false;
@@ -384,6 +386,12 @@
     const newTheme = currentTheme === 'light' ? lightTermTheme : darkTermTheme;
     if (term) term.options.theme = newTheme;
     if (shellTerm) shellTerm.options.theme = newTheme;
+
+    // Toggle highlight.js theme stylesheets
+    const hljsDark = document.getElementById('hljs-theme-dark');
+    const hljsLight = document.getElementById('hljs-theme-light');
+    if (hljsDark) hljsDark.disabled = currentTheme === 'light';
+    if (hljsLight) hljsLight.disabled = currentTheme === 'dark';
   }
 
   // --- Session output export ---
@@ -512,12 +520,14 @@
     if (!alive) {
       dotClass = 'exited';
       label = 'Exited';
-    } else if (idle === false) {
-      dotClass = 'working';
-      label = 'Working...';
-    } else {
+    } else if (idle === true) {
       dotClass = 'idle';
       label = 'Idle';
+    } else {
+      // idle === false (actively working) or undefined (no event yet — session
+      // just spawned, treat as working until first idle-change arrives)
+      dotClass = 'working';
+      label = 'Working...';
     }
     statusActivity.innerHTML =
       `<span class="status-activity-dot ${dotClass}"></span> ${label}`;
@@ -997,7 +1007,8 @@
         case 'state':
           projects = msg.projects;
           sessions = msg.sessions;
-          // Reconcile idle state: overwrite with server state and prune stale entries
+          // Reconcile idle state: prune stale entries, prefer local state over server
+          // (real-time session-idle events are fresher than broadcastState snapshots)
           {
             const currentSessionIds = new Set(sessions.map(s => s.id));
             for (const [id] of sessionIdleState) {
@@ -1006,7 +1017,7 @@
               }
             }
             for (const s of sessions) {
-              if (s.idle !== undefined) {
+              if (!sessionIdleState.has(s.id) && s.idle !== undefined) {
                 sessionIdleState.set(s.id, s.idle);
               }
             }
@@ -2594,13 +2605,19 @@
         info.className = 'image-info';
         info.textContent = `${img.naturalWidth} \u00D7 ${img.naturalHeight}`;
         fileViewerContent.appendChild(info);
+        if (fileViewerInfo) {
+          const ext = (tab.filename || '').split('.').pop().toUpperCase();
+          fileViewerInfo.textContent = `${img.naturalWidth}\u00D7${img.naturalHeight}` + (ext ? ` \u00B7 ${ext}` : '');
+        }
       };
+      if (fileViewerInfo) fileViewerInfo.textContent = '';
       return;
     }
 
     if (tab.type === 'binary') {
       fileViewerContent.className = 'binary-file';
       fileViewerContent.textContent = 'Binary file \u2014 not supported';
+      if (fileViewerInfo) fileViewerInfo.textContent = 'Binary';
       return;
     }
 
@@ -2608,6 +2625,7 @@
       fileViewerContent.className = 'markdown-body';
       const rawHtml = marked.parse(tab.content);
       fileViewerContent.innerHTML = DOMPurify.sanitize(rawHtml);
+      updateFileInfo(tab);
       return;
     }
 
@@ -2618,13 +2636,51 @@
       } else {
         renderUnifiedDiff(tab.content);
       }
+      updateFileInfo(tab);
       return;
     }
     fileViewerSplit.classList.add('hidden');
 
-    // Plain text with line numbers
+    // Plain text with line numbers and optional syntax highlighting
     fileViewerContent.className = 'plain-text';
     const lines = tab.content.split('\n');
+
+    // Detect language from file extension for syntax highlighting
+    const ext = (tab.filename || '').split('.').pop().toLowerCase();
+    let highlightedLines = null;
+    if (typeof hljs !== 'undefined') {
+      const langMap = {
+        js: 'javascript', mjs: 'javascript', cjs: 'javascript', jsx: 'javascript',
+        ts: 'typescript', tsx: 'typescript',
+        py: 'python', rb: 'ruby', go: 'go', rs: 'rust',
+        java: 'java', c: 'c', cpp: 'cpp', h: 'c', hpp: 'cpp',
+        cs: 'csharp', swift: 'swift', kt: 'kotlin',
+        css: 'css', scss: 'scss', less: 'less',
+        html: 'xml', htm: 'xml', xml: 'xml', svg: 'xml',
+        json: 'json', yaml: 'yaml', yml: 'yaml', toml: 'ini',
+        sh: 'bash', bash: 'bash', zsh: 'bash',
+        sql: 'sql', graphql: 'graphql',
+        md: 'markdown', markdown: 'markdown',
+        dockerfile: 'dockerfile',
+        makefile: 'makefile',
+        lua: 'lua', perl: 'perl', php: 'php', r: 'r',
+        vue: 'xml', svelte: 'xml',
+      };
+      const lang = langMap[ext];
+      try {
+        let result;
+        if (lang && hljs.getLanguage(lang)) {
+          result = hljs.highlight(tab.content, { language: lang });
+        } else {
+          result = hljs.highlightAuto(tab.content);
+        }
+        if (result && result.value) {
+          // Split highlighted HTML into lines
+          highlightedLines = result.value.split('\n');
+        }
+      } catch { /* fallback to plain text */ }
+    }
+
     const table = document.createElement('div');
     table.className = 'line-table';
     for (let i = 0; i < lines.length; i++) {
@@ -2637,12 +2693,19 @@
       num.onclick = () => highlightLine(row);
       const text = document.createElement('span');
       text.className = 'line-text';
-      text.textContent = lines[i];
+      if (highlightedLines && highlightedLines[i] !== undefined) {
+        text.innerHTML = DOMPurify.sanitize(highlightedLines[i]) || '\u00A0';
+      } else {
+        text.textContent = lines[i];
+      }
       row.appendChild(num);
       row.appendChild(text);
       table.appendChild(row);
     }
     fileViewerContent.appendChild(table);
+
+    // Update file info display
+    updateFileInfo(tab);
   }
 
   function highlightLine(rowEl) {
@@ -2658,6 +2721,57 @@
       highlightLine(row);
       row.scrollIntoView({ block: 'center' });
     }
+  }
+
+  // --- File info display ---
+  function updateFileInfo(tab) {
+    if (!fileViewerInfo) return;
+    if (!tab || !tab.content || tab.type === 'binary' || tab.type === 'image') {
+      fileViewerInfo.textContent = '';
+      return;
+    }
+    const lines = tab.content.split('\n').length;
+    const bytes = new Blob([tab.content]).size;
+    let sizeStr;
+    if (bytes < 1024) sizeStr = bytes + ' B';
+    else if (bytes < 1024 * 1024) sizeStr = (bytes / 1024).toFixed(1) + ' KB';
+    else sizeStr = (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+    const ext = (tab.filename || '').split('.').pop().toUpperCase();
+    fileViewerInfo.textContent = `${lines} lines \u00B7 ${sizeStr}` + (ext ? ` \u00B7 ${ext}` : '');
+  }
+
+  // --- File download ---
+  if (fileViewerDownload) {
+    fileViewerDownload.onclick = () => {
+      const tab = openTabs.find(t => t.id === activeTabId);
+      if (!tab) return;
+
+      let blob, filename;
+      filename = tab.filename || 'file';
+
+      if (tab.type === 'image' && tab.content) {
+        // tab.content is a blob URL for images
+        const a = document.createElement('a');
+        a.href = tab.content;
+        a.download = filename;
+        a.click();
+        return;
+      }
+
+      if (tab.content) {
+        blob = new Blob([tab.content], { type: 'text/plain' });
+      } else {
+        showToast('Nothing to download', 'error', 2000);
+        return;
+      }
+
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = filename;
+      a.click();
+      URL.revokeObjectURL(url);
+    };
   }
 
   // Refresh button handler
@@ -3971,6 +4085,15 @@
 
   // Extend keyboard handler: ? shows shortcuts, Ctrl+K opens palette, Esc closes
   document.addEventListener('keydown', (e) => {
+    // Ctrl+S — save file when in edit mode
+    if (e.key === 's' && (e.ctrlKey || e.metaKey)) {
+      e.preventDefault();
+      if (fileViewerEditing && fileViewerSave && !fileViewerSave.classList.contains('hidden')) {
+        fileViewerSave.click();
+      }
+      return;
+    }
+
     // Ctrl+B — toggle mini sidebar
     if (e.key === 'b' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -4805,15 +4928,45 @@
     clearTermSearchHighlights();
   }
 
+  let termSearchDecorations = [];
+
   function clearTermSearchHighlights() {
-    // Clear any previous search highlights by marking none
-    if (term && term._decorations) {
-      for (const d of term._decorations) d.dispose();
-      term._decorations = [];
+    for (const d of termSearchDecorations) {
+      try { d.dispose(); } catch { /* ignore */ }
+    }
+    termSearchDecorations = [];
+  }
+
+  function applyTermSearchHighlights() {
+    clearTermSearchHighlights();
+    if (!term || termSearchResults.length === 0) return;
+    // Limit decorations to avoid performance issues
+    const maxDecorations = 500;
+    const count = Math.min(termSearchResults.length, maxDecorations);
+    for (let i = 0; i < count; i++) {
+      const match = termSearchResults[i];
+      const isCurrent = (i === termSearchIdx);
+      try {
+        const marker = term.registerMarker(match.line - term.buffer.active.baseY);
+        if (!marker) continue;
+        const decoration = term.registerDecoration({
+          marker,
+          x: match.col,
+          width: match.length,
+          backgroundColor: undefined,
+        });
+        if (decoration) {
+          decoration.onRender((el) => {
+            el.className = isCurrent ? 'term-search-highlight-current' : 'term-search-highlight';
+          });
+          termSearchDecorations.push(decoration);
+        }
+      } catch { /* xterm decoration API may not support all cases */ }
     }
   }
 
   function searchTermBuffer(query) {
+    clearTermSearchHighlights();
     if (!term || !query) {
       termSearchCount.textContent = '';
       termSearchResults = [];
@@ -4854,6 +5007,7 @@
     const match = termSearchResults[termSearchIdx];
     term.scrollToLine(match.line);
     termSearchCount.textContent = `${termSearchIdx + 1} of ${termSearchResults.length}`;
+    applyTermSearchHighlights();
   }
 
   function termSearchNext_() {
@@ -5801,6 +5955,27 @@
 
   function hideFilePreview() {
     if (filePreviewTooltip) filePreviewTooltip.classList.add('hidden');
+  }
+
+  // --- Configure marked to use highlight.js for code blocks ---
+  if (typeof marked !== 'undefined' && typeof hljs !== 'undefined') {
+    marked.setOptions({
+      highlight: function (code, lang) {
+        if (lang && hljs.getLanguage(lang)) {
+          try { return hljs.highlight(code, { language: lang }).value; } catch { /* fallback */ }
+        }
+        try { return hljs.highlightAuto(code).value; } catch { /* fallback */ }
+        return '';
+      },
+    });
+  }
+
+  // --- Init highlight.js theme to match current theme ---
+  {
+    const hljsDark = document.getElementById('hljs-theme-dark');
+    const hljsLight = document.getElementById('hljs-theme-light');
+    if (hljsDark) hljsDark.disabled = currentTheme === 'light';
+    if (hljsLight) hljsLight.disabled = currentTheme === 'dark';
   }
 
   // --- Init ---

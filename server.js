@@ -1717,8 +1717,11 @@ export function createServer({ testMode = false } = {}) {
           // a tiny resize bounce. Both Ink (Claude) and Codex listen for
           // SIGWINCH and repaint, restoring correct cursor/visibility.
           // Track the restore timer so a client resize cancels it.
+          // Suppress idle-change events during the nudge to prevent the TUI
+          // redraw output from falsely triggering a working→idle cycle.
           if (cols && rows && manager.isAlive(sessionId)) {
             if (nudgeTimer) clearTimeout(nudgeTimer);
+            manager.suppressIdleChange(sessionId, 2000);
             const nudgeCols = Math.max(cols - 1, 1);
             manager.resize(sessionId, nudgeCols, rows);
             nudgeTimer = setTimeout(() => {
