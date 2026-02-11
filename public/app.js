@@ -171,6 +171,30 @@
   const termSearchClose = document.getElementById('term-search-close');
   let termSearchAddon = null;
 
+  // File autocomplete refs
+  const fileAutocomplete = document.getElementById('file-autocomplete');
+  const promptFileChips = document.getElementById('prompt-file-chips');
+
+  // Dirty tabs tracking (unsaved edits)
+  const dirtyTabs = new Set();
+
+  // Attached files state for prompt bar
+  let attachedFiles = [];
+
+  // Git diff preview ref
+  const gitDiffPreview = document.getElementById('git-diff-preview');
+  const btnGitPreview = document.getElementById('btn-git-preview');
+
+  // Scroll line count ref
+  const scrollLineCount = document.getElementById('scroll-line-count');
+
+  // Session pinning state
+  let pinnedSessions = new Set();
+  try {
+    const saved = localStorage.getItem('claude-console-pinned-sessions');
+    if (saved) pinnedSessions = new Set(JSON.parse(saved));
+  } catch {}
+
   // Notification dot state
   let gitChangesPending = false;
 
@@ -606,7 +630,7 @@
   }
 
   // --- Confirmation dialog ---
-  function showConfirmDialog(title, message, onConfirm, onCancel) {
+  function showConfirmDialog(title, message, onConfirm, onCancel, confirmText) {
     const overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';
 
@@ -638,7 +662,7 @@
 
     const confirmBtn = document.createElement('button');
     confirmBtn.className = 'confirm-ok';
-    confirmBtn.textContent = 'Delete Anyway';
+    confirmBtn.textContent = confirmText || 'Delete Anyway';
     confirmBtn.onclick = () => {
       cleanup();
       if (onConfirm) onConfirm();
@@ -1194,7 +1218,13 @@
       // Sessions list
       const projSessions = sessions
         .filter((s) => s.projectId === proj.id)
-        .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+        .sort((a, b) => {
+          // Pinned sessions first, then by creation date
+          const aPinned = pinnedSessions.has(a.id) ? 0 : 1;
+          const bPinned = pinnedSessions.has(b.id) ? 0 : 1;
+          if (aPinned !== bPinned) return aPinned - bPinned;
+          return new Date(a.createdAt) - new Date(b.createdAt);
+        });
 
       const ul = document.createElement('ul');
       ul.className = 'project-sessions';
@@ -1261,6 +1291,17 @@
         // Session actions container
         const actions = document.createElement('div');
         actions.className = 'session-actions';
+
+        // Pin button
+        const sPin = document.createElement('button');
+        sPin.className = 'session-pin' + (pinnedSessions.has(s.id) ? ' pinned' : '');
+        sPin.textContent = pinnedSessions.has(s.id) ? '\u2605' : '\u2606'; // ★ or ☆
+        sPin.title = pinnedSessions.has(s.id) ? 'Unpin session' : 'Pin session';
+        sPin.onclick = (e) => {
+          e.stopPropagation();
+          togglePinSession(s.id);
+        };
+        actions.appendChild(sPin);
 
         // Clone button
         const sClone = document.createElement('button');
@@ -1872,6 +1913,12 @@
       row.appendChild(icon);
       row.appendChild(label);
       row.onclick = () => openFileTab(filePath, file);
+      // Make file tree items draggable to prompt bar
+      row.draggable = true;
+      row.ondragstart = (e) => {
+        e.dataTransfer.setData('text/plain', filePath);
+        e.dataTransfer.effectAllowed = 'copy';
+      };
       container.appendChild(row);
     }
 
@@ -1987,6 +2034,15 @@
         label.className = 'tab-label';
         label.textContent = tab.filename;
         el.appendChild(label);
+
+        // Dirty indicator (unsaved edits)
+        if (dirtyTabs.has(tab.id)) {
+          const dirty = document.createElement('span');
+          dirty.className = 'tab-dirty';
+          dirty.textContent = '\u25CF'; // ●
+          dirty.title = 'Unsaved changes';
+          el.appendChild(dirty);
+        }
       }
 
       // Diff stats badge (only for unpinned)
@@ -2146,9 +2202,24 @@
     }
   }
 
-  function closeTab(tabId) {
+  function closeTab(tabId, force) {
     const tab = openTabs.find(t => t.id === tabId);
     if (tab && tab.pinned) return; // can't close pinned tabs
+    // Check for unsaved edits
+    if (!force && dirtyTabs.has(tabId)) {
+      showConfirmDialog(
+        'Unsaved Changes',
+        `"${tab ? tab.filename : 'File'}" has unsaved changes. Close anyway?`,
+        () => {
+          dirtyTabs.delete(tabId);
+          closeTab(tabId, true);
+        },
+        null,
+        'Close Anyway'
+      );
+      return;
+    }
+    dirtyTabs.delete(tabId);
     openTabs = openTabs.filter(t => t.id !== tabId);
     if (activeTabId === tabId) {
       activeTabId = openTabs.length > 0 ? openTabs[openTabs.length - 1].id : 'claude';
@@ -2597,6 +2668,14 @@
     textarea.className = 'fv-editor';
     textarea.value = tab.content;
     textarea.spellcheck = false;
+    textarea.oninput = () => {
+      if (tab.content !== textarea.value) {
+        dirtyTabs.add(tab.id);
+      } else {
+        dirtyTabs.delete(tab.id);
+      }
+      renderTabs(); // update dirty indicator on tab
+    };
     fileViewerContent.appendChild(textarea);
     textarea.focus();
   }
@@ -2646,6 +2725,7 @@
 
       // Update tab content and exit edit mode
       tab.content = newContent;
+      dirtyTabs.delete(tab.id);
       showToast('File saved', 'success', 2000);
       exitEditMode(true);
     } catch {
@@ -3563,12 +3643,19 @@
 
   function sendPromptInput() {
     if (!activeSessionId) return;
-    const text = promptInput.value;
-    if (!text) return;
+    let text = promptInput.value;
+    // Prepend attached file references
+    if (attachedFiles.length > 0) {
+      const refs = attachedFiles.map(f => '@' + f).join(' ');
+      text = refs + ' ' + text;
+    }
+    if (!text.trim()) return;
     // Send text to terminal followed by Enter
     wsSend(JSON.stringify({ type: 'input', data: text + '\r' }));
     promptInput.value = '';
     promptInput.style.height = 'auto';
+    attachedFiles = [];
+    renderFileChips();
     term.focus();
   }
 
@@ -4091,6 +4178,16 @@
       scrollToBottomBtn.classList.add('hidden');
     } else {
       scrollToBottomBtn.classList.remove('hidden');
+      // Show lines-from-bottom count
+      if (scrollLineCount) {
+        const buf = term.buffer.active;
+        const linesAway = buf.baseY - buf.viewportY;
+        if (linesAway > 0) {
+          scrollLineCount.textContent = linesAway + (linesAway === 1 ? ' line' : ' lines');
+        } else {
+          scrollLineCount.textContent = '';
+        }
+      }
     }
   }
 
@@ -4614,6 +4711,264 @@
     if (!session) return;
     const cloneName = session.name + ' (copy)';
     await createSession(session.projectId, cloneName, session.provider, session.providerOptions);
+  }
+
+  // --- @file autocomplete in prompt ---
+  let fileAutoItems = [];
+  let fileAutoIdx = -1;
+  let fileAutoQuery = '';
+
+  function collectAllFilePaths() {
+    const paths = [];
+    // Collect from open tabs
+    for (const t of openTabs) {
+      if (t.type !== 'diff') paths.push(t.fullPath);
+    }
+    // Collect from file tree
+    const labels = fileTreeEl.querySelectorAll('.file-tree-item:not(.file-tree-folder) .file-tree-label');
+    labels.forEach(label => {
+      const p = label.title || label.textContent;
+      if (p && !paths.includes(p)) paths.push(p);
+    });
+    return paths;
+  }
+
+  function showFileAutocomplete(query) {
+    if (!fileAutocomplete) return;
+    const all = collectAllFilePaths();
+    const q = query.toLowerCase();
+    fileAutoItems = all.filter(p => {
+      const name = p.split('/').pop().toLowerCase();
+      const full = p.toLowerCase();
+      return name.includes(q) || full.includes(q);
+    }).slice(0, 8);
+
+    if (fileAutoItems.length === 0) {
+      hideFileAutocomplete();
+      return;
+    }
+
+    fileAutoIdx = 0;
+    fileAutocomplete.innerHTML = '';
+    for (let i = 0; i < fileAutoItems.length; i++) {
+      const item = document.createElement('div');
+      item.className = 'file-auto-item' + (i === 0 ? ' active' : '');
+      const fname = fileAutoItems[i].split('/').pop();
+      const path = fileAutoItems[i];
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'file-auto-name';
+      nameSpan.textContent = fname;
+      const pathSpan = document.createElement('span');
+      pathSpan.className = 'file-auto-path';
+      pathSpan.textContent = path;
+      item.appendChild(nameSpan);
+      item.appendChild(pathSpan);
+      item.onmousedown = (e) => {
+        e.preventDefault();
+        selectFileAutoItem(i);
+      };
+      fileAutocomplete.appendChild(item);
+    }
+    fileAutocomplete.classList.remove('hidden');
+  }
+
+  function hideFileAutocomplete() {
+    if (!fileAutocomplete) return;
+    fileAutocomplete.classList.add('hidden');
+    fileAutoItems = [];
+    fileAutoIdx = -1;
+    fileAutoQuery = '';
+  }
+
+  function selectFileAutoItem(idx) {
+    if (idx < 0 || idx >= fileAutoItems.length) return;
+    const filePath = fileAutoItems[idx];
+    addAttachedFile(filePath);
+
+    // Replace the @query text in the prompt
+    const text = promptInput.value;
+    const atPos = text.lastIndexOf('@');
+    if (atPos >= 0) {
+      promptInput.value = text.substring(0, atPos) + text.substring(atPos + 1 + fileAutoQuery.length);
+    }
+    hideFileAutocomplete();
+    promptInput.focus();
+  }
+
+  function addAttachedFile(filePath) {
+    if (attachedFiles.includes(filePath)) return;
+    attachedFiles.push(filePath);
+    renderFileChips();
+  }
+
+  function removeAttachedFile(filePath) {
+    attachedFiles = attachedFiles.filter(f => f !== filePath);
+    renderFileChips();
+  }
+
+  function renderFileChips() {
+    if (!promptFileChips) return;
+    promptFileChips.innerHTML = '';
+    if (attachedFiles.length === 0) {
+      promptFileChips.classList.add('hidden');
+      return;
+    }
+    promptFileChips.classList.remove('hidden');
+    for (const f of attachedFiles) {
+      const chip = document.createElement('span');
+      chip.className = 'file-chip';
+      const fname = f.split('/').pop();
+      chip.textContent = fname;
+      chip.title = f;
+      const x = document.createElement('button');
+      x.className = 'file-chip-remove';
+      x.textContent = '\u00D7';
+      x.onclick = () => removeAttachedFile(f);
+      chip.appendChild(x);
+      promptFileChips.appendChild(chip);
+    }
+  }
+
+  // Hook into prompt input for @ detection
+  if (promptInput) {
+    const prevOninput = promptInput.oninput;
+    promptInput.oninput = () => {
+      if (prevOninput) prevOninput();
+      const text = promptInput.value;
+      const cursorPos = promptInput.selectionStart;
+      const beforeCursor = text.substring(0, cursorPos);
+      const atMatch = beforeCursor.match(/@(\S*)$/);
+      if (atMatch) {
+        fileAutoQuery = atMatch[1];
+        showFileAutocomplete(fileAutoQuery);
+      } else {
+        hideFileAutocomplete();
+      }
+    };
+
+    const prevOnkeydown = promptInput.onkeydown;
+    promptInput.onkeydown = (e) => {
+      // File autocomplete navigation
+      if (fileAutocomplete && !fileAutocomplete.classList.contains('hidden')) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          fileAutoIdx = (fileAutoIdx + 1) % fileAutoItems.length;
+          updateFileAutoSelection();
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          fileAutoIdx = (fileAutoIdx - 1 + fileAutoItems.length) % fileAutoItems.length;
+          updateFileAutoSelection();
+          return;
+        }
+        if (e.key === 'Tab' || e.key === 'Enter') {
+          if (fileAutoItems.length > 0) {
+            e.preventDefault();
+            selectFileAutoItem(fileAutoIdx);
+            return;
+          }
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          hideFileAutocomplete();
+          return;
+        }
+      }
+      if (prevOnkeydown) prevOnkeydown(e);
+    };
+  }
+
+  function updateFileAutoSelection() {
+    if (!fileAutocomplete) return;
+    const items = fileAutocomplete.querySelectorAll('.file-auto-item');
+    items.forEach((el, i) => el.classList.toggle('active', i === fileAutoIdx));
+  }
+
+  // --- Drag and drop files into prompt ---
+  if (promptBar) {
+    promptBar.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      promptBar.classList.add('prompt-dragover');
+    });
+    promptBar.addEventListener('dragleave', () => {
+      promptBar.classList.remove('prompt-dragover');
+    });
+    promptBar.addEventListener('drop', (e) => {
+      e.preventDefault();
+      promptBar.classList.remove('prompt-dragover');
+      const filePath = e.dataTransfer.getData('text/plain');
+      if (filePath) {
+        addAttachedFile(filePath);
+        promptInput.focus();
+      }
+    });
+  }
+
+  // --- Session pinning ---
+  function togglePinSession(sessionId) {
+    if (pinnedSessions.has(sessionId)) {
+      pinnedSessions.delete(sessionId);
+    } else {
+      pinnedSessions.add(sessionId);
+    }
+    try { localStorage.setItem('claude-console-pinned-sessions', JSON.stringify([...pinnedSessions])); } catch {}
+    renderSidebar();
+  }
+
+  // --- Git diff preview ---
+  let gitDiffPreviewVisible = false;
+
+  if (btnGitPreview) {
+    btnGitPreview.onclick = async () => {
+      if (gitDiffPreviewVisible) {
+        gitDiffPreview.classList.add('hidden');
+        gitDiffPreviewVisible = false;
+        btnGitPreview.textContent = 'Preview';
+        return;
+      }
+      if (!activeSessionId) return;
+      btnGitPreview.textContent = 'Loading...';
+      try {
+        const res = await fetch(`/api/sessions/${activeSessionId}/git/diff?staged=true`);
+        if (!res.ok) {
+          showToast('Failed to load diff preview', 'error');
+          btnGitPreview.textContent = 'Preview';
+          return;
+        }
+        const data = await res.json();
+        gitDiffPreview.innerHTML = '';
+        if (!data.diff || data.diff.trim() === '') {
+          gitDiffPreview.textContent = 'No staged changes to preview.';
+        } else {
+          const pre = document.createElement('pre');
+          pre.className = 'git-diff-preview-content';
+          const lines = data.diff.split('\n');
+          for (const line of lines) {
+            const span = document.createElement('span');
+            if (line.startsWith('+') && !line.startsWith('+++')) {
+              span.className = 'diff-add';
+            } else if (line.startsWith('-') && !line.startsWith('---')) {
+              span.className = 'diff-del';
+            } else if (line.startsWith('@@')) {
+              span.className = 'diff-hunk';
+            } else if (line.startsWith('diff ') || line.startsWith('index ')) {
+              span.className = 'diff-header';
+            }
+            span.textContent = line;
+            pre.appendChild(span);
+            pre.appendChild(document.createTextNode('\n'));
+          }
+          gitDiffPreview.appendChild(pre);
+        }
+        gitDiffPreview.classList.remove('hidden');
+        gitDiffPreviewVisible = true;
+        btnGitPreview.textContent = 'Hide';
+      } catch {
+        showToast('Failed to load diff preview', 'error');
+        btnGitPreview.textContent = 'Preview';
+      }
+    };
   }
 
   // --- Init ---

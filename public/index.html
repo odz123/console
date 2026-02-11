@@ -76,8 +76,12 @@
         </div>
       </div>
       <div id="prompt-bar" class="prompt-bar hidden">
-        <textarea id="prompt-input" class="prompt-input" rows="1" placeholder="Type a message..." autocomplete="off"></textarea>
-        <button id="prompt-send" class="prompt-send" title="Send (Enter)">Send</button>
+        <div class="prompt-bar-inner">
+          <textarea id="prompt-input" class="prompt-input" rows="1" placeholder="Type a message... (@ to mention files)" autocomplete="off"></textarea>
+          <button id="prompt-send" class="prompt-send" title="Send (Enter)">Send</button>
+        </div>
+        <div id="prompt-file-chips" class="prompt-file-chips hidden"></div>
+        <div id="file-autocomplete" class="file-autocomplete hidden"></div>
       </div>
       <div id="status-bar" class="hidden">
         <div class="status-bar-left">
@@ -129,8 +133,12 @@
           </div>
           <div id="git-commit-form" class="git-commit-form">
             <input id="git-commit-message" type="text" placeholder="Commit message..." maxlength="500">
-            <button id="btn-git-commit" class="git-commit-btn" disabled>Commit</button>
+            <div class="git-commit-actions">
+              <button id="btn-git-preview" class="git-preview-btn" title="Preview staged diff">Preview</button>
+              <button id="btn-git-commit" class="git-commit-btn" disabled>Commit</button>
+            </div>
           </div>
+          <div id="git-diff-preview" class="git-diff-preview hidden"></div>
           <div id="git-file-list" class="git-file-list"></div>
           <div id="git-log-section" class="git-log-section collapsed">
             <div class="git-log-header">
@@ -187,8 +195,11 @@
     </div>
   </div>
 
-  <!-- Scroll to bottom button -->
-  <button id="scroll-to-bottom" class="scroll-to-bottom hidden" title="Scroll to bottom">&#x25BC;</button>
+  <!-- Scroll to bottom button with line count -->
+  <button id="scroll-to-bottom" class="scroll-to-bottom hidden" title="Scroll to bottom">
+    <span id="scroll-line-count" class="scroll-line-count"></span>
+    <span>&#x25BC;</span>
+  </button>
 
   <!-- Stop button overlay (shown when Claude is working) -->
   <button id="stop-btn" class="stop-btn hidden" title="Stop Claude (Esc)">Stop</button>

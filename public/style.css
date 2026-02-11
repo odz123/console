@@ -2216,11 +2216,12 @@ kbd {
   position: absolute;
   bottom: 36px;
   right: 20px;
-  width: 32px;
-  height: 32px;
+  height: auto;
+  min-width: 32px;
+  padding: 6px 10px;
   background: #343230;
   border: 1px solid #3d3a36;
-  border-radius: 50%;
+  border-radius: 16px;
   color: #8c8478;
   font-size: 12px;
   cursor: pointer;
@@ -2228,8 +2229,9 @@ kbd {
   display: flex;
   align-items: center;
   justify-content: center;
+  gap: 4px;
   transition: background 0.15s, color 0.15s, opacity 0.2s;
-  opacity: 0.85;
+  opacity: 0.9;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 .scroll-to-bottom:hover {
@@ -2239,6 +2241,10 @@ kbd {
 }
 .scroll-to-bottom.hidden {
   display: none;
+}
+.scroll-line-count {
+  font-size: 11px;
+  white-space: nowrap;
 }
 
 /* --- Diff stats badge --- */
@@ -2616,6 +2622,22 @@ kbd {
 
 /* --- Session clone button --- */
 
+.session-pin {
+  background: none;
+  border: none;
+  color: #8c8478;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.session-pin:hover {
+  color: #d97757;
+}
+.session-pin.pinned {
+  color: #d4b87a;
+}
+
 .session-clone {
   background: none;
   border: none;
@@ -2629,6 +2651,70 @@ kbd {
   color: #d97757;
 }
 
+/* --- Tab dirty indicator --- */
+
+.tab-dirty {
+  color: #d4b87a;
+  font-size: 8px;
+  margin-left: 2px;
+}
+
+/* --- Git diff preview --- */
+
+.git-commit-actions {
+  display: flex;
+  gap: 4px;
+}
+
+.git-preview-btn {
+  padding: 4px 10px;
+  background: #3d3a36;
+  border: 1px solid #4a4540;
+  border-radius: 4px;
+  color: #8c8478;
+  font-size: 11px;
+  cursor: pointer;
+}
+.git-preview-btn:hover {
+  color: #d97757;
+  border-color: #d97757;
+}
+
+.git-diff-preview {
+  max-height: 250px;
+  overflow: auto;
+  background: #2b2a27;
+  border: 1px solid #3d3a36;
+  border-radius: 4px;
+  margin: 4px 0;
+  font-size: 11px;
+}
+.git-diff-preview.hidden {
+  display: none;
+}
+.git-diff-preview-content {
+  margin: 0;
+  padding: 4px 8px;
+  font-family: Menlo, Monaco, 'Courier New', monospace;
+  font-size: 11px;
+  line-height: 1.5;
+  white-space: pre;
+  color: #e8dfd5;
+}
+.git-diff-preview-content .diff-add {
+  color: #7cba6a;
+}
+.git-diff-preview-content .diff-del {
+  color: #d95555;
+}
+.git-diff-preview-content .diff-hunk {
+  color: #7aadca;
+}
+.git-diff-preview-content .diff-header {
+  color: #8c8478;
+  font-weight: 600;
+}
+
 /* --- Prompt input bar --- */
 
 .prompt-bar {
@@ -2637,15 +2723,101 @@ kbd {
   left: 0;
   right: 0;
   display: flex;
-  align-items: flex-end;
-  gap: 8px;
-  padding: 8px 12px;
+  flex-direction: column;
+  padding: 0;
   background: #343230;
   border-top: 1px solid #3d3a36;
   z-index: 3;
 }
 .prompt-bar.hidden {
   display: none;
+}
+.prompt-bar-inner {
+  display: flex;
+  align-items: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+}
+.prompt-bar.prompt-dragover {
+  border-top: 2px solid #d97757;
+  background: #3d3a36;
+}
+
+/* File chips (attached files) */
+.prompt-file-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  padding: 0 12px 6px;
+}
+.prompt-file-chips.hidden {
+  display: none;
+}
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 8px;
+  background: #4a4540;
+  color: #e8dfd5;
+  border-radius: 12px;
+  font-size: 11px;
+  max-width: 200px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-chip-remove {
+  background: none;
+  border: none;
+  color: #8c8478;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0;
+  line-height: 1;
+}
+.file-chip-remove:hover {
+  color: #d97757;
+}
+
+/* File autocomplete dropdown */
+.file-autocomplete {
+  position: absolute;
+  bottom: 100%;
+  left: 12px;
+  right: 12px;
+  max-height: 240px;
+  overflow-y: auto;
+  background: #343230;
+  border: 1px solid #3d3a36;
+  border-radius: 6px;
+  box-shadow: 0 -4px 16px rgba(0, 0, 0, 0.4);
+  z-index: 301;
+}
+.file-autocomplete.hidden {
+  display: none;
+}
+.file-auto-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  cursor: pointer;
+  font-size: 13px;
+}
+.file-auto-item:hover, .file-auto-item.active {
+  background: #3d3a36;
+}
+.file-auto-name {
+  color: #e8dfd5;
+  font-weight: 500;
+}
+.file-auto-path {
+  color: #8c8478;
+  font-size: 11px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .prompt-input {
@@ -3358,6 +3530,58 @@ body.light-theme .stop-btn {
 
 body.light-theme .session-clone:hover {
   color: #d97757;
+}
+
+body.light-theme .session-pin.pinned {
+  color: #a88f40;
+}
+
+body.light-theme .file-autocomplete {
+  background: #eae6e0;
+  border-color: #d9d1c7;
+}
+
+body.light-theme .file-auto-item:hover,
+body.light-theme .file-auto-item.active {
+  background: #d9d1c7;
+}
+
+body.light-theme .file-auto-name {
+  color: #3d3a36;
+}
+
+body.light-theme .file-chip {
+  background: #d9d1c7;
+  color: #3d3a36;
+}
+
+body.light-theme .prompt-bar {
+  background: #eae6e0;
+  border-top-color: #d9d1c7;
+}
+
+body.light-theme .git-diff-preview {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+}
+
+body.light-theme .git-diff-preview-content {
+  color: #3d3a36;
+}
+
+body.light-theme .git-preview-btn {
+  background: #d9d1c7;
+  border-color: #c4bdb2;
+  color: #6a6358;
+}
+
+body.light-theme .scroll-to-bottom {
+  background: #eae6e0;
+  border-color: #d9d1c7;
+}
+
+body.light-theme .tab-dirty {
+  color: #a88f40;
 }
 
 /* --- Mobile header (hidden on desktop) --- */
