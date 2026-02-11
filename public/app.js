@@ -113,6 +113,23 @@
   const symbolInput = document.getElementById('symbol-input');
   const symbolResults = document.getElementById('symbol-results');
 
+  // Minimap refs
+  const fvMinimap = document.getElementById('fv-minimap');
+  const fvMinimapCanvas = document.getElementById('fv-minimap-canvas');
+  const fvMinimapSlider = document.getElementById('fv-minimap-slider');
+
+  // Sticky scroll header ref
+  const fvStickyHeader = document.getElementById('fv-sticky-header');
+
+  // Diff navigation refs
+  const fvDiffPrev = document.getElementById('fv-diff-prev');
+  const fvDiffNext = document.getElementById('fv-diff-next');
+
+  // Session search refs
+  const sessionSearchOverlay = document.getElementById('session-search-overlay');
+  const sessionSearchInput = document.getElementById('session-search-input');
+  const sessionSearchResults = document.getElementById('session-search-results');
+
   // File tree header button refs
   const btnExpandAll = document.getElementById('btn-expand-all');
   const btnCollapseAll = document.getElementById('btn-collapse-all');
@@ -2593,6 +2610,9 @@
     renderFileViewerBreadcrumb(tab.fullPath);
     fileViewerContent.innerHTML = '';
     fileViewerContent.className = '';
+    // Hide minimap and sticky header by default (shown for plain text)
+    if (fvMinimap) fvMinimap.classList.add('hidden');
+    if (fvStickyHeader) fvStickyHeader.classList.add('hidden');
 
     if (tab.type === 'image') {
       fileViewerContent.className = 'image-preview';
@@ -2628,6 +2648,8 @@
 
     if (tab.type === 'diff') {
       fileViewerSplit.classList.remove('hidden');
+      if (fvDiffPrev) fvDiffPrev.classList.remove('hidden');
+      if (fvDiffNext) fvDiffNext.classList.remove('hidden');
       if (diffSplitMode) {
         renderSplitDiff(tab.content);
       } else {
@@ -2636,12 +2658,18 @@
       return;
     }
     fileViewerSplit.classList.add('hidden');
+    if (fvDiffPrev) fvDiffPrev.classList.add('hidden');
+    if (fvDiffNext) fvDiffNext.classList.add('hidden');
 
     // Plain text with line numbers
     fileViewerContent.className = 'plain-text';
     const lines = tab.content.split('\n');
     const table = document.createElement('div');
     table.className = 'line-table';
+
+    // Pre-compute foldable regions
+    const foldRegions = computeFoldRegions(lines);
+
     for (let i = 0; i < lines.length; i++) {
       const row = document.createElement('div');
       row.className = 'line-row';
@@ -2650,6 +2678,21 @@
       num.className = 'line-num';
       num.textContent = i + 1;
       num.onclick = (e) => handleLineClick(row, i + 1, e);
+
+      // Add fold toggle if this line starts a foldable region
+      const foldRegion = foldRegions.find(r => r.start === i);
+      if (foldRegion) {
+        const foldBtn = document.createElement('span');
+        foldBtn.className = 'fold-toggle';
+        foldBtn.textContent = '\u25BC';
+        foldBtn.title = `Fold lines ${i + 1}-${foldRegion.end + 1}`;
+        foldBtn.onclick = (e) => {
+          e.stopPropagation();
+          toggleFold(foldRegion, table, foldBtn);
+        };
+        num.appendChild(foldBtn);
+      }
+
       const text = document.createElement('span');
       text.className = 'line-text';
       // Add indent guides
@@ -2671,18 +2714,25 @@
       text.appendChild(textNode);
       // Double-click to highlight all matching words
       text.addEventListener('dblclick', (e) => handleWordDoubleClick(e));
+      // Click for bracket matching
+      text.addEventListener('click', (e) => handleBracketMatch(e, i, lines));
       row.appendChild(num);
       row.appendChild(text);
       table.appendChild(row);
     }
     fileViewerContent.appendChild(table);
 
-    // Update cursor position on scroll
+    // Update cursor position on scroll + sticky header + minimap slider
     fileViewerContent.addEventListener('scroll', () => {
       updateCursorPosition();
+      updateStickyHeader(tab);
+      updateMinimapSlider();
     });
     // Initial cursor position
     updateCursorPosition();
+
+    // Render minimap
+    renderMinimap(tab);
   }
 
   // Track last-clicked line for Shift+click range selection
@@ -4131,6 +4181,17 @@
     if ((e.ctrlKey || e.metaKey) && e.key === '0') {
       e.preventDefault();
       setTermFontSize(DEFAULT_FONT_SIZE);
+      return;
+    }
+
+    // Ctrl+Shift+F — Session search
+    if (e.key === 'F' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+      e.preventDefault();
+      if (sessionSearchOverlay && sessionSearchOverlay.classList.contains('hidden')) {
+        openSessionSearch();
+      } else {
+        closeSessionSearch();
+      }
       return;
     }
 
@@ -6184,6 +6245,491 @@
 
   function closeGoToSymbol() {
     if (symbolOverlay) symbolOverlay.classList.add('hidden');
+  }
+
+  // --- Minimap code overview ---
+
+  function renderMinimap(tab) {
+    if (!fvMinimap || !fvMinimapCanvas || !tab.content) return;
+    fvMinimap.classList.remove('hidden');
+
+    const lines = tab.content.split('\n');
+    const canvas = fvMinimapCanvas;
+    const ctx = canvas.getContext('2d');
+
+    const lineHeight = 2;
+    const canvasWidth = 80;
+    const canvasHeight = Math.min(lines.length * lineHeight, fileViewerContent.clientHeight || 600);
+
+    canvas.width = canvasWidth;
+    canvas.height = canvasHeight;
+    canvas.style.width = canvasWidth + 'px';
+    canvas.style.height = canvasHeight + 'px';
+
+    ctx.fillStyle = '#2b2a27';
+    ctx.fillRect(0, 0, canvasWidth, canvasHeight);
+
+    const scale = canvasHeight / (lines.length * lineHeight);
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (!line.trim()) continue;
+      const y = Math.floor(i * lineHeight * scale);
+      const indent = (line.match(/^\s*/) || [''])[0].length;
+      const textLen = Math.min(line.trim().length, 60);
+      const x = Math.floor(indent * 0.8);
+      const width = Math.floor(textLen * 0.8);
+
+      // Color based on content
+      if (/^\s*(function|class|def |fn |func |pub )/.test(line)) {
+        ctx.fillStyle = 'rgba(217, 167, 87, 0.6)';
+      } else if (/^\s*(if|else|for|while|switch|case|return|import|export)/.test(line)) {
+        ctx.fillStyle = 'rgba(87, 181, 217, 0.4)';
+      } else if (/^\s*(\/\/|#|\/\*)/.test(line)) {
+        ctx.fillStyle = 'rgba(140, 132, 120, 0.3)';
+      } else {
+        ctx.fillStyle = 'rgba(240, 235, 227, 0.25)';
+      }
+      ctx.fillRect(x, y, Math.max(width, 3), lineHeight - 1);
+    }
+
+    // Update slider position
+    updateMinimapSlider();
+
+    // Click on minimap to scroll
+    canvas.onclick = (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const clickY = e.clientY - rect.top;
+      const ratio = clickY / canvasHeight;
+      fileViewerContent.scrollTop = ratio * fileViewerContent.scrollHeight;
+    };
+
+    // Drag slider
+    let dragging = false;
+    fvMinimapSlider.onmousedown = (e) => {
+      e.preventDefault();
+      dragging = true;
+      document.onmousemove = (e2) => {
+        if (!dragging) return;
+        const rect = canvas.getBoundingClientRect();
+        const y = e2.clientY - rect.top;
+        const ratio = y / canvasHeight;
+        fileViewerContent.scrollTop = ratio * fileViewerContent.scrollHeight;
+      };
+      document.onmouseup = () => {
+        dragging = false;
+        document.onmousemove = null;
+        document.onmouseup = null;
+      };
+    };
+  }
+
+  function updateMinimapSlider() {
+    if (!fvMinimapSlider || !fvMinimapCanvas || !fileViewerContent) return;
+    const scrollTop = fileViewerContent.scrollTop;
+    const scrollHeight = fileViewerContent.scrollHeight;
+    const clientHeight = fileViewerContent.clientHeight;
+    const canvasHeight = fvMinimapCanvas.height;
+
+    if (scrollHeight <= clientHeight) {
+      fvMinimapSlider.style.display = 'none';
+      return;
+    }
+    fvMinimapSlider.style.display = '';
+    const ratio = scrollTop / scrollHeight;
+    const viewRatio = clientHeight / scrollHeight;
+    fvMinimapSlider.style.top = (ratio * canvasHeight) + 'px';
+    fvMinimapSlider.style.height = Math.max(viewRatio * canvasHeight, 20) + 'px';
+  }
+
+  // --- Bracket matching ---
+
+  const BRACKET_PAIRS = { '(': ')', '[': ']', '{': '}' };
+  const CLOSE_BRACKETS = { ')': '(', ']': '[', '}': '{' };
+
+  function handleBracketMatch(e, lineIdx, lines) {
+    // Clear previous bracket highlights
+    clearBracketHighlights();
+
+    const textEl = e.target.closest('.line-text');
+    if (!textEl) return;
+
+    // Get click position within text
+    const sel = window.getSelection();
+    if (!sel.focusNode || sel.focusNode.nodeType !== Node.TEXT_NODE) return;
+    const offset = sel.focusOffset;
+    const lineText = lines[lineIdx];
+    if (!lineText) return;
+
+    const ch = lineText[offset] || lineText[offset - 1];
+    const pos = lineText[offset] && (BRACKET_PAIRS[lineText[offset]] || CLOSE_BRACKETS[lineText[offset]]) ? offset : offset - 1;
+    const bracket = lineText[pos];
+    if (!bracket) return;
+
+    let matchLine, matchPos;
+    if (BRACKET_PAIRS[bracket]) {
+      // Search forward for closing bracket
+      const result = findMatchingBracket(lines, lineIdx, pos, bracket, BRACKET_PAIRS[bracket], 1);
+      if (result) { matchLine = result.line; matchPos = result.pos; }
+    } else if (CLOSE_BRACKETS[bracket]) {
+      // Search backward for opening bracket
+      const result = findMatchingBracket(lines, lineIdx, pos, bracket, CLOSE_BRACKETS[bracket], -1);
+      if (result) { matchLine = result.line; matchPos = result.pos; }
+    } else {
+      return;
+    }
+
+    if (matchLine !== undefined) {
+      highlightBracket(lineIdx + 1, pos);
+      highlightBracket(matchLine + 1, matchPos);
+    }
+  }
+
+  function findMatchingBracket(lines, startLine, startPos, open, close, dir) {
+    let depth = 0;
+    let line = startLine;
+    let pos = startPos;
+
+    while (line >= 0 && line < lines.length) {
+      const text = lines[line];
+      const start = line === startLine ? pos : (dir > 0 ? 0 : text.length - 1);
+      for (let i = start; i >= 0 && i < text.length; i += dir) {
+        const ch = text[i];
+        if (ch === open) depth += dir;
+        else if (ch === close) depth -= dir;
+        if (depth === 0) return { line, pos: i };
+      }
+      line += dir;
+    }
+    return null;
+  }
+
+  function highlightBracket(lineNum, charPos) {
+    const row = fileViewerContent.querySelector(`.line-row[data-line-num="${lineNum}"]`);
+    if (!row) return;
+    const textEl = row.querySelector('.line-text');
+    if (!textEl) return;
+
+    // Find the text node and wrap the character
+    const walker = document.createTreeWalker(textEl, NodeFilter.SHOW_TEXT, null);
+    let offset = 0;
+    while (walker.nextNode()) {
+      const node = walker.currentNode;
+      if (offset + node.length > charPos) {
+        const localPos = charPos - offset;
+        const range = document.createRange();
+        range.setStart(node, localPos);
+        range.setEnd(node, localPos + 1);
+        const mark = document.createElement('span');
+        mark.className = 'bracket-highlight';
+        range.surroundContents(mark);
+        return;
+      }
+      offset += node.length;
+    }
+  }
+
+  function clearBracketHighlights() {
+    const marks = fileViewerContent.querySelectorAll('.bracket-highlight');
+    marks.forEach(mark => {
+      const parent = mark.parentNode;
+      mark.replaceWith(document.createTextNode(mark.textContent));
+      parent.normalize();
+    });
+  }
+
+  // --- Code folding ---
+
+  function computeFoldRegions(lines) {
+    const regions = [];
+    const stack = [];
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      const trimmed = line.trim();
+
+      // Detect opening braces or blocks
+      if (trimmed.endsWith('{') || trimmed.endsWith('(') || trimmed.endsWith('[')) {
+        stack.push(i);
+      }
+      // Detect class/function headers for Python-style
+      if (/^(def |class |if |for |while |with |try:)/.test(trimmed) && !trimmed.endsWith('{')) {
+        const indent = (line.match(/^\s*/) || [''])[0].length;
+        // Find end of block by indentation
+        let end = i;
+        for (let j = i + 1; j < lines.length; j++) {
+          const nextLine = lines[j].trim();
+          if (!nextLine) continue; // skip blank lines
+          const nextIndent = (lines[j].match(/^\s*/) || [''])[0].length;
+          if (nextIndent <= indent) break;
+          end = j;
+        }
+        if (end > i + 1) {
+          regions.push({ start: i, end });
+        }
+      }
+
+      // Detect closing braces
+      if (trimmed.startsWith('}') || trimmed.startsWith(')') || trimmed.startsWith(']')) {
+        if (stack.length > 0) {
+          const start = stack.pop();
+          if (i - start > 2) { // Only fold regions with >2 lines
+            regions.push({ start, end: i });
+          }
+        }
+      }
+    }
+
+    // Deduplicate by start line
+    const seen = new Set();
+    return regions.filter(r => {
+      if (seen.has(r.start)) return false;
+      seen.add(r.start);
+      return true;
+    }).sort((a, b) => a.start - b.start);
+  }
+
+  function toggleFold(region, table, btn) {
+    const rows = table.querySelectorAll('.line-row');
+    const isFolded = btn.classList.contains('folded');
+
+    if (isFolded) {
+      // Unfold: show hidden rows
+      btn.classList.remove('folded');
+      btn.textContent = '\u25BC';
+      // Remove fold placeholder
+      const placeholder = table.querySelector(`.fold-placeholder[data-fold-start="${region.start}"]`);
+      if (placeholder) placeholder.remove();
+      rows.forEach(row => {
+        const ln = parseInt(row.dataset.lineNum, 10) - 1;
+        if (ln > region.start && ln <= region.end) {
+          row.classList.remove('folded-line');
+        }
+      });
+    } else {
+      // Fold: hide rows in range
+      btn.classList.add('folded');
+      btn.textContent = '\u25B6';
+      const foldedCount = region.end - region.start;
+      let insertAfterRow = null;
+      rows.forEach(row => {
+        const ln = parseInt(row.dataset.lineNum, 10) - 1;
+        if (ln === region.start) insertAfterRow = row;
+        if (ln > region.start && ln <= region.end) {
+          row.classList.add('folded-line');
+        }
+      });
+      // Add fold placeholder
+      if (insertAfterRow) {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'fold-placeholder';
+        placeholder.dataset.foldStart = region.start;
+        placeholder.textContent = `  \u2026 ${foldedCount} lines folded`;
+        placeholder.onclick = () => toggleFold(region, table, btn);
+        insertAfterRow.after(placeholder);
+      }
+    }
+  }
+
+  // --- Sticky scroll header (current function/class) ---
+
+  function updateStickyHeader(tab) {
+    if (!fvStickyHeader || !tab || tab.type !== 'text') return;
+
+    const scrollTop = fileViewerContent.scrollTop;
+    const firstRow = fileViewerContent.querySelector('.line-row');
+    if (!firstRow) return;
+    const rowHeight = firstRow.offsetHeight || 20;
+    const topLine = Math.floor(scrollTop / rowHeight);
+
+    // Find the nearest function/class definition above the current scroll position
+    const lines = tab.content.split('\n');
+    let headerText = null;
+    let headerLine = -1;
+
+    for (let i = topLine; i >= 0; i--) {
+      const line = lines[i];
+      if (!line) continue;
+      // Match function/class/def/fn declarations
+      const m = line.match(/^\s*((?:export\s+)?(?:async\s+)?function\s+\w+|(?:export\s+)?class\s+\w+|def\s+\w+|(?:pub\s+)?(?:async\s+)?fn\s+\w+|func\s+\w+)/);
+      if (m) {
+        headerText = line.trim();
+        headerLine = i + 1;
+        break;
+      }
+    }
+
+    if (headerText && topLine > headerLine) {
+      fvStickyHeader.textContent = headerText;
+      fvStickyHeader.classList.remove('hidden');
+      fvStickyHeader.onclick = () => goToLine(headerLine);
+      fvStickyHeader.title = `Line ${headerLine} — click to jump`;
+    } else {
+      fvStickyHeader.classList.add('hidden');
+    }
+  }
+
+  // --- Diff navigation (next/prev change) ---
+
+  let diffChangeIdx = -1;
+
+  if (fvDiffPrev) {
+    fvDiffPrev.onclick = () => navigateDiffChange(-1);
+  }
+  if (fvDiffNext) {
+    fvDiffNext.onclick = () => navigateDiffChange(1);
+  }
+
+  function navigateDiffChange(dir) {
+    const changes = fileViewerContent.querySelectorAll('.diff-add, .diff-del, .diff-hunk');
+    if (changes.length === 0) return;
+
+    diffChangeIdx += dir;
+    if (diffChangeIdx < 0) diffChangeIdx = changes.length - 1;
+    if (diffChangeIdx >= changes.length) diffChangeIdx = 0;
+
+    changes.forEach(el => el.classList.remove('diff-change-active'));
+    const target = changes[diffChangeIdx];
+    target.classList.add('diff-change-active');
+    target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+  }
+
+  // --- Session search across all sessions ---
+
+  function openSessionSearch() {
+    if (!sessionSearchOverlay) return;
+    sessionSearchOverlay.classList.remove('hidden');
+    sessionSearchInput.value = '';
+    sessionSearchResults.innerHTML = '';
+    sessionSearchInput.focus();
+
+    sessionSearchInput.oninput = debounce(() => {
+      performSessionSearch(sessionSearchInput.value);
+    }, 300);
+
+    sessionSearchInput.onkeydown = (e) => {
+      if (e.key === 'Escape') {
+        closeSessionSearch();
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        moveSessionSearchSelection(1);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveSessionSearchSelection(-1);
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const active = sessionSearchResults.querySelector('.quick-open-item.active');
+        if (active) active.click();
+        return;
+      }
+    };
+
+    sessionSearchOverlay.onclick = (e) => {
+      if (e.target === sessionSearchOverlay) closeSessionSearch();
+    };
+  }
+
+  let sessionSearchIdx = 0;
+
+  function performSessionSearch(query) {
+    sessionSearchResults.innerHTML = '';
+    sessionSearchIdx = 0;
+    if (!query || query.length < 2) return;
+
+    const q = query.toLowerCase();
+    const results = [];
+
+    // Search session names
+    for (const session of sessions) {
+      const name = (session.name || '').toLowerCase();
+      if (name.includes(q)) {
+        results.push({ type: 'session', session, matchField: 'name', text: session.name });
+      }
+    }
+
+    // Search session IDs (useful for finding specific sessions)
+    for (const session of sessions) {
+      if (session.id.toLowerCase().includes(q) && !results.find(r => r.session?.id === session.id)) {
+        results.push({ type: 'session', session, matchField: 'id', text: session.id });
+      }
+    }
+
+    // Search open tab contents
+    for (const tab of openTabs) {
+      if (tab.content && tab.content.toLowerCase().includes(q)) {
+        const lines = tab.content.split('\n');
+        for (let i = 0; i < lines.length; i++) {
+          if (lines[i].toLowerCase().includes(q)) {
+            results.push({ type: 'file', tab, line: i + 1, text: lines[i].trim().substring(0, 100) });
+            if (results.length > 50) break;
+          }
+        }
+      }
+      if (results.length > 50) break;
+    }
+
+    results.slice(0, 50).forEach((r, idx) => {
+      const item = document.createElement('div');
+      item.className = 'quick-open-item' + (idx === 0 ? ' active' : '');
+
+      if (r.type === 'session') {
+        const icon = document.createElement('span');
+        icon.className = 'session-search-icon';
+        icon.textContent = '\u25CF';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'quick-open-name';
+        nameEl.textContent = r.session.name || 'Unnamed';
+        const detailEl = document.createElement('span');
+        detailEl.className = 'quick-open-path';
+        const proj = projects.find(p => p.id === r.session.projectId);
+        detailEl.textContent = proj ? proj.name : '';
+        item.appendChild(icon);
+        item.appendChild(nameEl);
+        item.appendChild(detailEl);
+        item.onclick = () => {
+          closeSessionSearch();
+          attachSession(r.session.id);
+        };
+      } else {
+        const icon = document.createElement('span');
+        icon.className = 'session-search-icon';
+        icon.textContent = '\u2263';
+        const nameEl = document.createElement('span');
+        nameEl.className = 'quick-open-name';
+        nameEl.textContent = `${r.tab.filename}:${r.line}`;
+        const detailEl = document.createElement('span');
+        detailEl.className = 'quick-open-path';
+        detailEl.textContent = r.text;
+        item.appendChild(icon);
+        item.appendChild(nameEl);
+        item.appendChild(detailEl);
+        item.onclick = () => {
+          closeSessionSearch();
+          switchTab(r.tab.id);
+          setTimeout(() => goToLine(r.line), 100);
+        };
+      }
+      sessionSearchResults.appendChild(item);
+    });
+  }
+
+  function moveSessionSearchSelection(dir) {
+    const items = sessionSearchResults.querySelectorAll('.quick-open-item');
+    if (items.length === 0) return;
+    items[sessionSearchIdx]?.classList.remove('active');
+    sessionSearchIdx = Math.max(0, Math.min(items.length - 1, sessionSearchIdx + dir));
+    items[sessionSearchIdx]?.classList.add('active');
+    items[sessionSearchIdx]?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function closeSessionSearch() {
+    if (sessionSearchOverlay) sessionSearchOverlay.classList.add('hidden');
   }
 
   // --- Init ---

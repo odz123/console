@@ -48,6 +48,8 @@
             <button id="file-viewer-edit" class="fv-btn" title="Edit file">Edit</button>
             <button id="file-viewer-save" class="fv-btn fv-btn-save hidden" title="Save changes">Save</button>
             <button id="file-viewer-cancel-edit" class="fv-btn hidden" title="Cancel editing">Cancel</button>
+            <button id="fv-diff-prev" class="fv-btn hidden" title="Previous change">&uarr;&#916;</button>
+            <button id="fv-diff-next" class="fv-btn hidden" title="Next change">&darr;&#916;</button>
             <button id="file-viewer-split" class="fv-btn hidden" title="Toggle split diff view">Split</button>
             <button id="file-viewer-wrap" class="fv-btn" title="Toggle word wrap">Wrap</button>
             <button id="file-viewer-copy" class="fv-btn" title="Copy file content">Copy</button>
@@ -67,7 +69,9 @@
           </div>
           <button id="fv-search-toggle-replace" class="fv-search-btn fv-toggle-replace" title="Toggle Replace">&darr;</button>
         </div>
+        <div id="fv-sticky-header" class="fv-sticky-header hidden"></div>
         <div id="file-viewer-content"></div>
+        <div id="fv-minimap" class="fv-minimap hidden"><canvas id="fv-minimap-canvas"></canvas><div id="fv-minimap-slider" class="fv-minimap-slider"></div></div>
       </div>
       <div id="no-session">
         <div class="landing-page">
@@ -222,6 +226,14 @@
     </div>
   </div>
 
+  <!-- Session search overlay -->
+  <div id="session-search-overlay" class="quick-open-overlay hidden">
+    <div class="quick-open-panel session-search-panel">
+      <input id="session-search-input" type="text" placeholder="Search across all sessions..." autocomplete="off">
+      <div id="session-search-results" class="quick-open-results"></div>
+    </div>
+  </div>
+
   <!-- File preview tooltip -->
   <div id="file-preview-tooltip" class="file-preview-tooltip hidden"></div>
 
@@ -268,6 +280,7 @@
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>K</kbd><span>Command palette</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>P</kbd><span>Quick open file</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd><span>Go to symbol</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd><span>Search all sessions</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Tab</kbd><span>Cycle tabs</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find (and replace) in file</span></div>
@@ -302,6 +315,8 @@
           <div class="shortcut-row"><kbd>&uarr;</kbd>/<kbd>&darr;</kbd>/<kbd>j</kbd>/<kbd>k</kbd><span>Navigate file tree</span></div>
           <div class="shortcut-row"><kbd>Enter</kbd><span>Open file / toggle folder</span></div>
           <div class="shortcut-row"><kbd>Drag</kbd> file<span>Drop into prompt bar</span></div>
+          <div class="shortcut-row"><kbd>Shift</kbd>+<kbd>Click</kbd> line<span>Select line range &amp; copy</span></div>
+          <div class="shortcut-row"><kbd>Double-click</kbd> word<span>Highlight all occurrences</span></div>
           <div class="shortcut-row">Filter input<span>Search files by name</span></div>
         </div>
         <div class="shortcuts-section">
