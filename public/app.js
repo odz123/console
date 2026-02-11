@@ -520,12 +520,14 @@
     if (!alive) {
       dotClass = 'exited';
       label = 'Exited';
-    } else if (idle === false) {
-      dotClass = 'working';
-      label = 'Working...';
-    } else {
+    } else if (idle === true) {
       dotClass = 'idle';
       label = 'Idle';
+    } else {
+      // idle === false (actively working) or undefined (no event yet — session
+      // just spawned, treat as working until first idle-change arrives)
+      dotClass = 'working';
+      label = 'Working...';
     }
     statusActivity.innerHTML =
       `<span class="status-activity-dot ${dotClass}"></span> ${label}`;
@@ -1005,7 +1007,8 @@
         case 'state':
           projects = msg.projects;
           sessions = msg.sessions;
-          // Reconcile idle state: overwrite with server state and prune stale entries
+          // Reconcile idle state: prune stale entries, prefer local state over server
+          // (real-time session-idle events are fresher than broadcastState snapshots)
           {
             const currentSessionIds = new Set(sessions.map(s => s.id));
             for (const [id] of sessionIdleState) {
@@ -1014,7 +1017,7 @@
               }
             }
             for (const s of sessions) {
-              if (s.idle !== undefined) {
+              if (!sessionIdleState.has(s.id) && s.idle !== undefined) {
                 sessionIdleState.set(s.id, s.idle);
               }
             }

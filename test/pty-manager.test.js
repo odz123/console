@@ -115,6 +115,85 @@ describe('PtyManager', () => {
   });
 });
 
+describe('PtyManager idle detection', () => {
+  let manager;
+
+  before(() => {
+    manager = new PtyManager();
+  });
+
+  after(() => {
+    for (const id of manager.getAll()) {
+      manager.kill(id);
+    }
+  });
+
+  it('should start as not idle and become idle after silence', async () => {
+    const sessionId = 'idle-test-1';
+    manager.spawn(sessionId, {
+      cwd: process.cwd(),
+      shell: '/bin/bash',
+      args: ['-c', 'echo hi && sleep 5'],
+    });
+    // Immediately after spawn, should not be idle (process just started)
+    assert.strictEqual(manager.isIdle(sessionId), false);
+
+    // Wait for idle timeout (1.5s) + buffer
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    assert.strictEqual(manager.isIdle(sessionId), true, 'should be idle after silence');
+    manager.kill(sessionId);
+  });
+
+  it('should emit idle-change events', async () => {
+    const sessionId = 'idle-test-2';
+    const events = [];
+
+    manager.spawn(sessionId, {
+      cwd: process.cwd(),
+      shell: '/bin/bash',
+      args: ['-c', 'echo start && sleep 5'],
+    });
+    manager.onIdleChange(sessionId, (idle) => events.push(idle));
+
+    // Wait for idle
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    assert.ok(events.includes(true), 'should have emitted idle=true');
+    manager.kill(sessionId);
+  });
+
+  it('should suppress idle changes during suppressIdleChange window', async () => {
+    const sessionId = 'idle-suppress-test';
+    const events = [];
+
+    manager.spawn(sessionId, {
+      cwd: process.cwd(),
+      shell: '/bin/bash',
+      args: ['-c', 'sleep 10'],
+    });
+    manager.onIdleChange(sessionId, (idle) => events.push(idle));
+
+    // Wait until idle
+    await new Promise((resolve) => setTimeout(resolve, 2000));
+    const idleEventCount = events.filter(e => e === true).length;
+    assert.ok(idleEventCount >= 1, 'should have received idle=true before suppression');
+
+    // Suppress and send data — should not trigger idle=false
+    events.length = 0;
+    manager.suppressIdleChange(sessionId, 1000);
+    manager.write(sessionId, 'echo suppressed\r');
+    await new Promise((resolve) => setTimeout(resolve, 200));
+
+    const falseEvents = events.filter(e => e === false);
+    assert.strictEqual(falseEvents.length, 0, 'should NOT emit idle=false during suppression');
+
+    manager.kill(sessionId);
+  });
+
+  it('isIdle returns true for non-existent session', () => {
+    assert.strictEqual(manager.isIdle('nonexistent'), true);
+  });
+});
+
 describe('PtyManager shell processes', () => {
   let manager;
 
