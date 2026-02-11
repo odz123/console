@@ -432,6 +432,24 @@ export function createServer({ testMode = false } = {}) {
       return res.status(413).json({ error: 'File too large (max 1MB)' });
     }
 
+    // Check if this is an image file we can serve directly
+    const IMAGE_EXTENSIONS = new Set(['png', 'jpg', 'jpeg', 'gif', 'webp', 'svg', 'ico', 'bmp']);
+    const IMAGE_MIME = {
+      png: 'image/png', jpg: 'image/jpeg', jpeg: 'image/jpeg',
+      gif: 'image/gif', webp: 'image/webp', svg: 'image/svg+xml',
+      ico: 'image/x-icon', bmp: 'image/bmp',
+    };
+    const fileExt = path.extname(realResolved).slice(1).toLowerCase();
+    if (IMAGE_EXTENSIONS.has(fileExt)) {
+      let imgContent;
+      try {
+        imgContent = await fs.promises.readFile(realResolved);
+      } catch {
+        return res.status(404).json({ error: 'File not found' });
+      }
+      return res.type(IMAGE_MIME[fileExt] || 'application/octet-stream').send(imgContent);
+    }
+
     // Read file and check for binary (null bytes in first 8KB)
     let content;
     try {

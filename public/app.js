@@ -156,6 +156,21 @@
   const promptInput = document.getElementById('prompt-input');
   const promptSend = document.getElementById('prompt-send');
 
+  // Stop button ref
+  const stopBtn = document.getElementById('stop-btn');
+
+  // Quick actions ref
+  const quickActionsMenu = document.getElementById('quick-actions');
+
+  // Terminal search refs
+  const termSearchBar = document.getElementById('term-search-bar');
+  const termSearchInput = document.getElementById('term-search-input');
+  const termSearchCount = document.getElementById('term-search-count');
+  const termSearchPrev = document.getElementById('term-search-prev');
+  const termSearchNext = document.getElementById('term-search-next');
+  const termSearchClose = document.getElementById('term-search-close');
+  let termSearchAddon = null;
+
   // Notification dot state
   let gitChangesPending = false;
 
@@ -446,6 +461,11 @@
     // Show/hide progress bar
     if (progressBar) {
       progressBar.classList.toggle('hidden', dotClass !== 'working');
+    }
+
+    // Show/hide stop button overlay
+    if (stopBtn) {
+      stopBtn.classList.toggle('hidden', dotClass !== 'working' || activeTabId !== 'claude');
     }
 
     // Show/hide restart button based on session state
@@ -1241,6 +1261,17 @@
         // Session actions container
         const actions = document.createElement('div');
         actions.className = 'session-actions';
+
+        // Clone button
+        const sClone = document.createElement('button');
+        sClone.className = 'session-clone';
+        sClone.textContent = '\u2398'; // Clone icon
+        sClone.title = 'Clone session';
+        sClone.onclick = (e) => {
+          e.stopPropagation();
+          cloneSession(s.id);
+        };
+        actions.appendChild(sClone);
 
         // Archive button (only show if session has worktree)
         if (s.worktreePath) {
@@ -2085,6 +2116,12 @@
           promptBar.classList.add('hidden');
         }
       }
+      // Show stop button if Claude is working
+      if (stopBtn) {
+        const idle = sessionIdleState.get(activeSessionId);
+        const session = sessions.find(s => s.id === activeSessionId);
+        stopBtn.classList.toggle('hidden', !(session && session.alive !== false && idle === false));
+      }
       termWrapper.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
       updateScrollToBottomBtn();
       term.focus();
@@ -2093,10 +2130,12 @@
       // Reading clientWidth/clientHeight forces a reflow after the inset change.
       if (fitAddon) fitAddon.fit();
     } else {
-      // Show file viewer, hide terminal, hide prompt bar
+      // Show file viewer, hide terminal, hide prompt bar, hide stop button
       termWrapper.style.display = 'none';
       fileViewer.classList.remove('hidden');
       if (promptBar) promptBar.classList.add('hidden');
+      if (stopBtn) stopBtn.classList.add('hidden');
+      closeTermSearch();
       fileViewer.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
       scrollToBottomBtn.classList.add('hidden');
 
@@ -2228,7 +2267,12 @@
     const contentType = res.headers.get('content-type') || '';
     let tab;
 
-    if (contentType.includes('application/json')) {
+    if (contentType.startsWith('image/')) {
+      // Image file — create blob URL for preview
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      tab = { id: filePath, filename, fullPath: filePath, content: blobUrl, type: 'image', mimeType: contentType };
+    } else if (contentType.includes('application/json')) {
       // JSON response — either a binary file indicator or unexpected payload
       const data = await res.json();
       if (data.isBinary) {
@@ -2404,6 +2448,25 @@
     renderFileViewerBreadcrumb(tab.fullPath);
     fileViewerContent.innerHTML = '';
     fileViewerContent.className = '';
+
+    if (tab.type === 'image') {
+      fileViewerContent.className = 'image-preview';
+      const img = document.createElement('img');
+      img.src = tab.content;
+      img.alt = tab.filename;
+      img.className = 'image-preview-img';
+      img.draggable = false;
+      fileViewerContent.appendChild(img);
+
+      // Image info bar
+      img.onload = () => {
+        const info = document.createElement('div');
+        info.className = 'image-info';
+        info.textContent = `${img.naturalWidth} \u00D7 ${img.naturalHeight}`;
+        fileViewerContent.appendChild(info);
+      };
+      return;
+    }
 
     if (tab.type === 'binary') {
       fileViewerContent.className = 'binary-file';
@@ -3704,7 +3767,45 @@
       return;
     }
 
-    // Esc — close overlays
+    // Ctrl+N — new session (if a project is expanded)
+    if (e.key === 'n' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+      e.preventDefault();
+      // Find first expanded project and show new session input
+      if (activeSessionId) {
+        const session = sessions.find(s => s.id === activeSessionId);
+        if (session) {
+          const projGroup = projectListEl.querySelector(`[data-project-id="${session.projectId}"]`);
+          if (projGroup) {
+            expandedProjects.add(session.projectId);
+            renderSidebar();
+            const ul = projGroup.querySelector('.project-sessions');
+            if (ul) showInlineSessionInput(ul, session.projectId);
+          }
+        }
+      } else if (projects.length > 0) {
+        const proj = projects[0];
+        expandedProjects.add(proj.id);
+        renderSidebar();
+        const projGroup = projectListEl.querySelector(`[data-project-id="${proj.id}"]`);
+        if (projGroup) {
+          const ul = projGroup.querySelector('.project-sessions');
+          if (ul) showInlineSessionInput(ul, proj.id);
+        }
+      }
+      return;
+    }
+
+    // Ctrl+F — find in terminal (when on Claude tab) or file
+    if (e.key === 'f' && (e.ctrlKey || e.metaKey)) {
+      if (activeSessionId && activeTabId === 'claude') {
+        e.preventDefault();
+        openTermSearch();
+        return;
+      }
+      // For file tabs, the existing fv-search handler in the earlier keydown listener catches it
+    }
+
+    // Esc — close overlays, stop Claude, or close terminal search
     if (e.key === 'Escape') {
       if (!cpOverlay.classList.contains('hidden')) {
         closeCommandPalette();
@@ -3715,6 +3816,21 @@
         closeShortcuts();
         e.stopPropagation();
         return;
+      }
+      if (termSearchBar && !termSearchBar.classList.contains('hidden')) {
+        closeTermSearch();
+        term.focus();
+        e.stopPropagation();
+        return;
+      }
+      // Esc while Claude is working sends interrupt
+      if (activeSessionId && activeTabId === 'claude') {
+        const idle = sessionIdleState.get(activeSessionId);
+        const session = sessions.find(s => s.id === activeSessionId);
+        if (session && session.alive !== false && idle === false) {
+          wsSend(JSON.stringify({ type: 'input', sessionId: activeSessionId, data: '\x03' }));
+          return;
+        }
       }
     }
 
@@ -3768,6 +3884,8 @@
         { icon: '\u25CB', label: 'Toggle Theme', meta: 'light/dark', action: () => { closeCommandPalette(); toggleTheme(); } },
         { icon: '\u21E9', label: 'Export Session Output', meta: 'download .txt', action: () => { closeCommandPalette(); exportSessionOutput(); } },
         { icon: '\u266A', label: 'Toggle Notifications', meta: notificationsEnabled ? 'on' : 'off', action: () => { closeCommandPalette(); toggleNotifications(); } },
+        { icon: '\u2398', label: 'Find in Terminal', meta: 'Ctrl+F', action: () => { closeCommandPalette(); openTermSearch(); } },
+        { icon: '\u2398', label: 'Clone Session', meta: 'duplicate', action: () => { closeCommandPalette(); cloneSession(activeSessionId); } },
       );
     }
 
@@ -4308,6 +4426,194 @@
         });
       });
     }
+  }
+
+  // --- Stop button ---
+  if (stopBtn) {
+    stopBtn.onclick = () => {
+      if (!activeSessionId) return;
+      wsSend(JSON.stringify({ type: 'input', sessionId: activeSessionId, data: '\x03' }));
+      term.focus();
+    };
+  }
+
+  // --- Quick actions menu ---
+  let quickActionsVisible = false;
+
+  function showQuickActions() {
+    if (!quickActionsMenu || !promptBar) return;
+    // Position above prompt bar
+    const promptRect = promptBar.getBoundingClientRect();
+    quickActionsMenu.style.bottom = (window.innerHeight - promptRect.top + 4) + 'px';
+    quickActionsMenu.style.left = promptRect.left + 'px';
+    quickActionsMenu.classList.remove('hidden');
+    quickActionsVisible = true;
+  }
+
+  function hideQuickActions() {
+    if (!quickActionsMenu) return;
+    quickActionsMenu.classList.add('hidden');
+    quickActionsVisible = false;
+  }
+
+  if (quickActionsMenu) {
+    quickActionsMenu.querySelectorAll('.qa-item').forEach(item => {
+      item.onclick = () => {
+        const action = item.dataset.action;
+        if (action && activeSessionId) {
+          wsSend(JSON.stringify({ type: 'input', data: action + '\r' }));
+          hideQuickActions();
+          promptInput.value = '';
+          term.focus();
+        }
+      };
+    });
+  }
+
+  // Show quick actions when typing "/" at beginning of prompt
+  if (promptInput) {
+    const origOninput = promptInput.oninput;
+    promptInput.oninput = () => {
+      if (origOninput) origOninput();
+      const text = promptInput.value;
+      if (text === '/') {
+        showQuickActions();
+      } else if (quickActionsVisible && !text.startsWith('/')) {
+        hideQuickActions();
+      }
+    };
+
+    const origOnkeydown = promptInput.onkeydown;
+    promptInput.onkeydown = (e) => {
+      if (quickActionsVisible && e.key === 'Escape') {
+        e.preventDefault();
+        hideQuickActions();
+        return;
+      }
+      if (origOnkeydown) origOnkeydown(e);
+    };
+  }
+
+  // Close quick actions on outside click
+  document.addEventListener('mousedown', (e) => {
+    if (quickActionsVisible && quickActionsMenu && !quickActionsMenu.contains(e.target) &&
+        promptInput !== e.target) {
+      hideQuickActions();
+    }
+  });
+
+  // --- Terminal search ---
+  let termSearchResults = [];
+  let termSearchIdx = -1;
+
+  function openTermSearch() {
+    if (!termSearchBar || !activeSessionId || activeTabId !== 'claude') return;
+    termSearchBar.classList.remove('hidden');
+    termSearchInput.value = '';
+    termSearchCount.textContent = '';
+    termSearchResults = [];
+    termSearchIdx = -1;
+    termSearchInput.focus();
+  }
+
+  function closeTermSearch() {
+    if (!termSearchBar) return;
+    termSearchBar.classList.add('hidden');
+    termSearchResults = [];
+    termSearchIdx = -1;
+    // Clear search decoration
+    clearTermSearchHighlights();
+  }
+
+  function clearTermSearchHighlights() {
+    // Clear any previous search highlights by marking none
+    if (term && term._decorations) {
+      for (const d of term._decorations) d.dispose();
+      term._decorations = [];
+    }
+  }
+
+  function searchTermBuffer(query) {
+    if (!term || !query) {
+      termSearchCount.textContent = '';
+      termSearchResults = [];
+      termSearchIdx = -1;
+      return;
+    }
+
+    const q = query.toLowerCase();
+    const buf = term.buffer.active;
+    const results = [];
+
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (!line) continue;
+      const text = line.translateToString(true).toLowerCase();
+      let startIdx = 0;
+      while (true) {
+        const pos = text.indexOf(q, startIdx);
+        if (pos === -1) break;
+        results.push({ line: i, col: pos, length: query.length });
+        startIdx = pos + 1;
+      }
+    }
+
+    termSearchResults = results;
+    if (results.length > 0) {
+      termSearchIdx = results.length - 1; // Start from last match
+      termSearchCount.textContent = `${termSearchIdx + 1} of ${results.length}`;
+      scrollToTermSearchResult();
+    } else {
+      termSearchIdx = -1;
+      termSearchCount.textContent = 'No results';
+    }
+  }
+
+  function scrollToTermSearchResult() {
+    if (termSearchIdx < 0 || termSearchIdx >= termSearchResults.length) return;
+    const match = termSearchResults[termSearchIdx];
+    term.scrollToLine(match.line);
+    termSearchCount.textContent = `${termSearchIdx + 1} of ${termSearchResults.length}`;
+  }
+
+  function termSearchNext_() {
+    if (termSearchResults.length === 0) return;
+    termSearchIdx = (termSearchIdx + 1) % termSearchResults.length;
+    scrollToTermSearchResult();
+  }
+
+  function termSearchPrev_() {
+    if (termSearchResults.length === 0) return;
+    termSearchIdx = (termSearchIdx - 1 + termSearchResults.length) % termSearchResults.length;
+    scrollToTermSearchResult();
+  }
+
+  if (termSearchInput) {
+    termSearchInput.oninput = debounce(() => searchTermBuffer(termSearchInput.value), 200);
+    termSearchInput.onkeydown = (e) => {
+      if (e.key === 'Enter' && e.shiftKey) {
+        e.preventDefault();
+        termSearchPrev_();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        termSearchNext_();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeTermSearch();
+        term.focus();
+      }
+    };
+  }
+  if (termSearchNext) termSearchNext.onclick = termSearchNext_;
+  if (termSearchPrev) termSearchPrev.onclick = termSearchPrev_;
+  if (termSearchClose) termSearchClose.onclick = () => { closeTermSearch(); term.focus(); };
+
+  // --- Session cloning ---
+  async function cloneSession(sessionId) {
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session) return;
+    const cloneName = session.name + ' (copy)';
+    await createSession(session.projectId, cloneName, session.provider, session.providerOptions);
   }
 
   // --- Init ---

@@ -2463,6 +2463,172 @@ kbd {
   max-width: 200px;
 }
 
+/* --- Stop button overlay --- */
+
+.stop-btn {
+  position: fixed;
+  bottom: 80px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 8px 32px;
+  background: #d97757;
+  color: #fff;
+  border: none;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  z-index: 10;
+  box-shadow: 0 4px 16px rgba(217, 119, 87, 0.4);
+  transition: background 0.15s, transform 0.15s, box-shadow 0.15s;
+  letter-spacing: 0.02em;
+}
+.stop-btn:hover {
+  background: #c4653f;
+  box-shadow: 0 6px 20px rgba(217, 119, 87, 0.5);
+  transform: translateX(-50%) scale(1.04);
+}
+.stop-btn.hidden {
+  display: none;
+}
+
+/* --- Quick actions menu --- */
+
+.quick-actions {
+  position: fixed;
+  background: #343230;
+  border: 1px solid #3d3a36;
+  border-radius: 8px;
+  padding: 4px 0;
+  min-width: 200px;
+  z-index: 300;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+.quick-actions.hidden {
+  display: none;
+}
+
+.qa-header {
+  padding: 6px 12px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: #8c8478;
+}
+
+.qa-item {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: #e8dfd5;
+  background: none;
+  border: none;
+  cursor: pointer;
+}
+.qa-item:hover {
+  background: #3d3a36;
+  color: #d97757;
+}
+
+/* --- Terminal search bar --- */
+
+.term-search-bar {
+  position: absolute;
+  top: 36px;
+  right: 16px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 8px;
+  background: #343230;
+  border: 1px solid #3d3a36;
+  border-radius: 6px;
+  z-index: 10;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+.term-search-bar.hidden {
+  display: none;
+}
+
+#term-search-input {
+  width: 200px;
+  padding: 4px 8px;
+  background: #2b2a27;
+  border: 1px solid #3d3a36;
+  border-radius: 4px;
+  color: #f0ebe3;
+  font-size: 12px;
+  outline: none;
+}
+#term-search-input:focus {
+  border-color: #d97757;
+}
+
+.term-search-count {
+  font-size: 11px;
+  color: #8c8478;
+  min-width: 60px;
+  text-align: center;
+}
+
+.term-search-btn {
+  background: none;
+  border: none;
+  color: #8c8478;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 2px 4px;
+}
+.term-search-btn:hover {
+  color: #d97757;
+}
+
+/* --- Image preview --- */
+
+#file-viewer-content.image-preview {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  gap: 12px;
+  background: repeating-conic-gradient(#3d3a36 0% 25%, #343230 0% 50%) 50% / 16px 16px;
+}
+
+.image-preview-img {
+  max-width: 100%;
+  max-height: calc(100vh - 200px);
+  object-fit: contain;
+  border-radius: 4px;
+  box-shadow: 0 2px 12px rgba(0, 0, 0, 0.3);
+}
+
+.image-info {
+  font-size: 12px;
+  color: #8c8478;
+  padding: 4px 12px;
+  background: #343230;
+  border-radius: 4px;
+}
+
+/* --- Session clone button --- */
+
+.session-clone {
+  background: none;
+  border: none;
+  color: #8c8478;
+  font-size: 12px;
+  cursor: pointer;
+  padding: 0 2px;
+  line-height: 1;
+}
+.session-clone:hover {
+  color: #d97757;
+}
+
 /* --- Prompt input bar --- */
 
 .prompt-bar {
@@ -3151,6 +3317,47 @@ body.light-theme #mobile-title {
 body.light-theme #btn-mobile-sidebar,
 body.light-theme #btn-mobile-panel {
   color: #3d3a36;
+}
+
+body.light-theme .quick-actions {
+  background: #eae6e0;
+  border-color: #d9d1c7;
+}
+
+body.light-theme .qa-item {
+  color: #3d3a36;
+}
+
+body.light-theme .qa-item:hover {
+  background: #d9d1c7;
+}
+
+body.light-theme .term-search-bar {
+  background: #eae6e0;
+  border-color: #d9d1c7;
+}
+
+body.light-theme #term-search-input {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+  color: #3d3a36;
+}
+
+body.light-theme #file-viewer-content.image-preview {
+  background: repeating-conic-gradient(#eae6e0 0% 25%, #f5f2ee 0% 50%) 50% / 16px 16px;
+}
+
+body.light-theme .image-info {
+  background: #eae6e0;
+  color: #6a6358;
+}
+
+body.light-theme .stop-btn {
+  box-shadow: 0 4px 16px rgba(217, 119, 87, 0.3);
+}
+
+body.light-theme .session-clone:hover {
+  color: #d97757;
 }
 
 /* --- Mobile header (hidden on desktop) --- */
