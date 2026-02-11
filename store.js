@@ -7,6 +7,20 @@ import fs from 'node:fs';
 const DEFAULT_DB_DIR = path.join(os.homedir(), '.claude-console');
 const DEFAULT_DB_PATH = path.join(DEFAULT_DB_DIR, 'data.db');
 
+function rowToAccount(row) {
+  let env = null;
+  if (row.env) {
+    try { env = JSON.parse(row.env); } catch { /* ignore */ }
+  }
+  return {
+    id: row.id,
+    name: row.name,
+    provider: row.provider || 'claude',
+    env,
+    createdAt: row.created_at,
+  };
+}
+
 function rowToProject(row) {
   return {
     id: row.id,
@@ -30,6 +44,7 @@ function rowToSession(row) {
     claudeSessionId: row.claude_session_id,
     provider: row.provider || 'claude',
     providerOptions,
+    accountId: row.account_id || null,
     status: row.status,
     createdAt: row.created_at,
   };
@@ -52,7 +67,7 @@ export function createStore(dbPath) {
   db.pragma('busy_timeout = 5000');
 
   // --- Schema versioning & migrations ---
-  const CURRENT_SCHEMA_VERSION = 3;
+  const CURRENT_SCHEMA_VERSION = 5;
 
   db.exec('CREATE TABLE IF NOT EXISTS schema_version (version INTEGER NOT NULL)');
   const versionRow = db.prepare('SELECT version FROM schema_version').get();
@@ -96,6 +111,26 @@ export function createStore(dbPath) {
     dbVersion = 3;
   }
 
+  // Migration 3 -> 4: add accounts table
+  if (dbVersion < 4) {
+    db.exec(`
+      CREATE TABLE IF NOT EXISTS accounts (
+        id TEXT PRIMARY KEY,
+        name TEXT NOT NULL,
+        provider TEXT NOT NULL DEFAULT 'claude',
+        env TEXT,
+        created_at TEXT NOT NULL
+      );
+    `);
+    dbVersion = 4;
+  }
+
+  // Migration 4 -> 5: add account_id column to sessions
+  if (dbVersion < 5) {
+    db.exec(`ALTER TABLE sessions ADD COLUMN account_id TEXT REFERENCES accounts(id) ON DELETE SET NULL`);
+    dbVersion = 5;
+  }
+
   // Upsert schema version
   if (!versionRow) {
     db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(CURRENT_SCHEMA_VERSION);
@@ -114,7 +149,7 @@ export function createStore(dbPath) {
     getAllSessions: db.prepare('SELECT * FROM sessions ORDER BY created_at ASC'),
     getSession: db.prepare('SELECT * FROM sessions WHERE id = ?'),
     insertSession: db.prepare(
-      'INSERT INTO sessions (id, project_id, name, branch_name, worktree_path, claude_session_id, provider, provider_options, status, created_at) VALUES (@id, @projectId, @name, @branchName, @worktreePath, @claudeSessionId, @provider, @providerOptions, @status, @createdAt)'
+      'INSERT INTO sessions (id, project_id, name, branch_name, worktree_path, claude_session_id, provider, provider_options, account_id, status, created_at) VALUES (@id, @projectId, @name, @branchName, @worktreePath, @claudeSessionId, @provider, @providerOptions, @accountId, @status, @createdAt)'
     ),
     updateSession: db.prepare('UPDATE sessions SET status = @status, claude_session_id = @claudeSessionId WHERE id = @id'),
     renameSession: db.prepare('UPDATE sessions SET name = @name WHERE id = @id'),
@@ -122,6 +157,16 @@ export function createStore(dbPath) {
     getSessionWorktreePaths: db.prepare(
       'SELECT worktree_path FROM sessions WHERE project_id = ? AND worktree_path IS NOT NULL'
     ),
+    // Account statements
+    getAccounts: db.prepare('SELECT * FROM accounts ORDER BY created_at ASC'),
+    getAccount: db.prepare('SELECT * FROM accounts WHERE id = ?'),
+    insertAccount: db.prepare(
+      'INSERT INTO accounts (id, name, provider, env, created_at) VALUES (@id, @name, @provider, @env, @createdAt)'
+    ),
+    updateAccount: db.prepare(
+      'UPDATE accounts SET name = @name, provider = @provider, env = @env WHERE id = @id'
+    ),
+    deleteAccount: db.prepare('DELETE FROM accounts WHERE id = ?'),
   };
 
   return {
@@ -153,7 +198,7 @@ export function createStore(dbPath) {
       return row ? rowToSession(row) : undefined;
     },
 
-    createSession({ id, projectId, name, branchName, worktreePath, claudeSessionId, provider, providerOptions, status, createdAt }) {
+    createSession({ id, projectId, name, branchName, worktreePath, claudeSessionId, provider, providerOptions, accountId, status, createdAt }) {
       stmts.insertSession.run({
         id,
         projectId,
@@ -163,6 +208,7 @@ export function createStore(dbPath) {
         claudeSessionId: claudeSessionId ?? null,
         provider: provider ?? 'claude',
         providerOptions: providerOptions ? JSON.stringify(providerOptions) : null,
+        accountId: accountId ?? null,
         status: status ?? 'running',
         createdAt,
       });
@@ -192,10 +238,49 @@ export function createStore(dbPath) {
       return stmts.getSessionWorktreePaths.all(projectId).map(row => row.worktree_path);
     },
 
+    // --- Account methods ---
+
+    getAccounts() {
+      return stmts.getAccounts.all().map(rowToAccount);
+    },
+
+    getAccount(id) {
+      const row = stmts.getAccount.get(id);
+      return row ? rowToAccount(row) : undefined;
+    },
+
+    createAccount({ id, name, provider, env, createdAt }) {
+      stmts.insertAccount.run({
+        id,
+        name,
+        provider: provider ?? 'claude',
+        env: env ? JSON.stringify(env) : null,
+        createdAt,
+      });
+      return this.getAccount(id);
+    },
+
+    updateAccount(id, { name, provider, env }) {
+      const current = this.getAccount(id);
+      if (!current) return undefined;
+      stmts.updateAccount.run({
+        id,
+        name: name ?? current.name,
+        provider: provider ?? current.provider,
+        env: env !== undefined ? (env ? JSON.stringify(env) : null) : (current.env ? JSON.stringify(current.env) : null),
+      });
+      return this.getAccount(id);
+    },
+
+    deleteAccount(id) {
+      stmts.deleteAccount.run(id);
+    },
+
     getAll() {
       return {
         projects: this.getProjects(),
         sessions: stmts.getAllSessions.all().map(rowToSession),
+        accounts: this.getAccounts(),
       };
     },
 

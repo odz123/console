@@ -1031,7 +1031,7 @@ export function createServer({ testMode = false } = {}) {
   }
 
   function broadcastState() {
-    const { projects, sessions } = store.getAll();
+    const { projects, sessions, accounts } = store.getAll();
     const msg = JSON.stringify({
       type: 'state',
       projects,
@@ -1040,6 +1040,7 @@ export function createServer({ testMode = false } = {}) {
         alive: manager.isAlive(s.id),
         idle: manager.isIdle(s.id),
       })),
+      accounts,
     });
     for (const ws of clients) {
       safeSend(ws, msg);
@@ -1103,10 +1104,20 @@ export function createServer({ testMode = false } = {}) {
       }
     }
 
+    // Resolve account env vars for the PTY process
+    let accountEnv = undefined;
+    if (session.accountId) {
+      const account = store.getAccount(session.accountId);
+      if (account && account.env) {
+        accountEnv = account.env;
+      }
+    }
+
     const spawnOpts = {
       cwd,
       provider: session.provider || 'claude',
       providerOptions: session.providerOptions,
+      accountEnv,
       ...(testMode
         ? { shell: '/bin/bash', args: ['-c', 'sleep 5'] }
         : session.claudeSessionId
@@ -1206,7 +1217,7 @@ export function createServer({ testMode = false } = {}) {
   // --- Projects REST API ---
 
   app.get('/api/projects', (req, res) => {
-    const { projects, sessions } = store.getAll();
+    const { projects, sessions, accounts } = store.getAll();
     res.json({
       projects,
       sessions: sessions.map((s) => ({
@@ -1214,6 +1225,7 @@ export function createServer({ testMode = false } = {}) {
         alive: manager.isAlive(s.id),
         idle: manager.isIdle(s.id),
       })),
+      accounts,
     });
   });
 
@@ -1285,9 +1297,130 @@ export function createServer({ testMode = false } = {}) {
     res.json({ ok: true });
   });
 
-  // --- Sessions REST API ---
+  // --- Accounts REST API ---
 
   const VALID_PROVIDERS = ['claude', 'codex'];
+  const MAX_ACCOUNTS = 50;
+  const MAX_ACCOUNT_NAME_LENGTH = 100;
+  const MAX_ENV_VARS = 30;
+  const MAX_ENV_KEY_LENGTH = 100;
+  const MAX_ENV_VALUE_LENGTH = 1024;
+
+  // Allowlisted env var prefixes/names for safety — only API-related vars
+  const ALLOWED_ENV_PATTERNS = [
+    /^ANTHROPIC_/,
+    /^AWS_/,
+    /^CLAUDE_CODE_/,
+    /^OPENAI_/,
+    /^CODEX_/,
+    /^AZURE_OPENAI_/,
+    /^CLOUD_ML_REGION$/,
+    /^VERTEX_REGION_/,
+  ];
+
+  function isAllowedEnvKey(key) {
+    return ALLOWED_ENV_PATTERNS.some(pattern => pattern.test(key));
+  }
+
+  function validateAccountEnv(env) {
+    if (env == null) return { valid: true, env: null };
+    if (typeof env !== 'object' || Array.isArray(env)) {
+      return { valid: false, error: 'env must be an object' };
+    }
+    const keys = Object.keys(env);
+    if (keys.length > MAX_ENV_VARS) {
+      return { valid: false, error: `Too many env vars (max ${MAX_ENV_VARS})` };
+    }
+    for (const key of keys) {
+      if (typeof key !== 'string' || key.length > MAX_ENV_KEY_LENGTH) {
+        return { valid: false, error: `Invalid env key: ${key}` };
+      }
+      if (!isAllowedEnvKey(key)) {
+        return { valid: false, error: `Env key not allowed: ${key}. Must match a known provider pattern (ANTHROPIC_*, AWS_*, CLAUDE_CODE_*, OPENAI_*, CODEX_*, AZURE_OPENAI_*, CLOUD_ML_REGION, VERTEX_REGION_*).` };
+      }
+      const val = env[key];
+      if (typeof val !== 'string' || val.length > MAX_ENV_VALUE_LENGTH) {
+        return { valid: false, error: `Invalid value for env key: ${key}` };
+      }
+    }
+    // Strip empty-string values
+    const cleaned = {};
+    for (const [k, v] of Object.entries(env)) {
+      if (v) cleaned[k] = v;
+    }
+    return { valid: true, env: Object.keys(cleaned).length > 0 ? cleaned : null };
+  }
+
+  app.get('/api/accounts', (req, res) => {
+    res.json({ accounts: store.getAccounts() });
+  });
+
+  app.post('/api/accounts', (req, res) => {
+    const { name, provider = 'claude', env } = req.body;
+    if (!name || typeof name !== 'string' || name.length > MAX_ACCOUNT_NAME_LENGTH) {
+      return res.status(400).json({ error: `name is required (string, max ${MAX_ACCOUNT_NAME_LENGTH} chars)` });
+    }
+    if (!VALID_PROVIDERS.includes(provider)) {
+      return res.status(400).json({ error: `provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
+    }
+    const envResult = validateAccountEnv(env);
+    if (!envResult.valid) {
+      return res.status(400).json({ error: envResult.error });
+    }
+    const existing = store.getAccounts();
+    if (existing.length >= MAX_ACCOUNTS) {
+      return res.status(429).json({ error: `Maximum accounts reached (${MAX_ACCOUNTS})` });
+    }
+
+    const account = store.createAccount({
+      id: crypto.randomUUID(),
+      name: name.trim(),
+      provider,
+      env: envResult.env,
+      createdAt: new Date().toISOString(),
+    });
+    broadcastState();
+    res.status(201).json(account);
+  });
+
+  app.put('/api/accounts/:id', (req, res) => {
+    const account = store.getAccount(req.params.id);
+    if (!account) return res.status(404).json({ error: 'Account not found' });
+
+    const { name, provider, env } = req.body;
+    if (name != null && (typeof name !== 'string' || name.length > MAX_ACCOUNT_NAME_LENGTH || !name.trim())) {
+      return res.status(400).json({ error: `name must be a non-empty string (max ${MAX_ACCOUNT_NAME_LENGTH} chars)` });
+    }
+    if (provider != null && !VALID_PROVIDERS.includes(provider)) {
+      return res.status(400).json({ error: `provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
+    }
+    if (env !== undefined) {
+      const envResult = validateAccountEnv(env);
+      if (!envResult.valid) {
+        return res.status(400).json({ error: envResult.error });
+      }
+    }
+
+    const envResult = env !== undefined ? validateAccountEnv(env) : { env: undefined };
+    const updated = store.updateAccount(req.params.id, {
+      name: name ? name.trim() : undefined,
+      provider,
+      env: envResult.env,
+    });
+    broadcastState();
+    res.json(updated);
+  });
+
+  app.delete('/api/accounts/:id', (req, res) => {
+    const account = store.getAccount(req.params.id);
+    if (!account) return res.status(404).json({ error: 'Account not found' });
+
+    store.deleteAccount(req.params.id);
+    broadcastState();
+    res.json({ ok: true });
+  });
+
+  // --- Sessions REST API ---
 
   const VALID_CODEX_APPROVAL_MODES = ['suggest', 'auto-edit', 'full-auto'];
 
@@ -1295,10 +1428,25 @@ export function createServer({ testMode = false } = {}) {
     const project = store.getProject(req.params.id);
     if (!project) return res.status(404).json({ error: 'project not found' });
 
-    const { name, provider = 'claude', providerOptions } = req.body;
+    const { name, provider: rawProvider, providerOptions, accountId } = req.body;
     if (!name || typeof name !== 'string' || name.length > MAX_NAME_LENGTH) {
       return res.status(400).json({ error: `name is required (string, max ${MAX_NAME_LENGTH} chars)` });
     }
+
+    // Resolve account if provided
+    let account = null;
+    if (accountId) {
+      if (typeof accountId !== 'string') {
+        return res.status(400).json({ error: 'accountId must be a string' });
+      }
+      account = store.getAccount(accountId);
+      if (!account) {
+        return res.status(400).json({ error: 'Account not found' });
+      }
+    }
+
+    // Provider: explicit > account > default
+    const provider = rawProvider || (account ? account.provider : 'claude');
     if (!VALID_PROVIDERS.includes(provider)) {
       return res.status(400).json({ error: `provider must be one of: ${VALID_PROVIDERS.join(', ')}` });
     }
@@ -1378,6 +1526,7 @@ export function createServer({ testMode = false } = {}) {
       claudeSessionId: null,
       provider,
       providerOptions: sanitizedOptions,
+      accountId: account ? account.id : null,
       status: 'running',
       createdAt: new Date().toISOString(),
     });
@@ -1625,7 +1774,7 @@ export function createServer({ testMode = false } = {}) {
     let attachedSessionId = null;
 
     // Send initial state
-    const { projects, sessions } = store.getAll();
+    const { projects, sessions, accounts } = store.getAll();
     safeSend(
       ws,
       JSON.stringify({
@@ -1636,6 +1785,7 @@ export function createServer({ testMode = false } = {}) {
           alive: manager.isAlive(s.id),
           idle: manager.isIdle(s.id),
         })),
+        accounts,
       })
     );
 

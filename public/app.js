@@ -9,6 +9,7 @@
   let activeSessionId = null;
   let projects = [];
   let sessions = [];
+  let accounts = [];
   let expandedProjects = new Set();
   const sessionIdleState = new Map();
   let reconnectDelay = 1000;
@@ -78,6 +79,19 @@
   const fileViewerContent = document.getElementById('file-viewer-content');
   const fileViewerInfo = document.getElementById('file-viewer-info');
   let fileViewerWordWrap = false;
+
+  // --- Account DOM refs ---
+  const accountListEl = document.getElementById('account-list');
+  const btnAddAccount = document.getElementById('btn-add-account');
+  const accountModalOverlay = document.getElementById('account-modal-overlay');
+  const accountModalTitle = document.getElementById('account-modal-title');
+  const accountModalId = document.getElementById('account-modal-id');
+  const accountModalName = document.getElementById('account-modal-name');
+  const accountModalProvider = document.getElementById('account-modal-provider');
+  const accountEnvRows = document.getElementById('account-env-rows');
+  const btnAccountAddEnv = document.getElementById('btn-account-add-env');
+  const btnAccountCancel = document.getElementById('btn-account-cancel');
+  const btnAccountSave = document.getElementById('btn-account-save');
   let fileViewerEditing = false;
   let diffSplitMode = false;
 
@@ -1007,6 +1021,7 @@
         case 'state':
           projects = msg.projects;
           sessions = msg.sessions;
+          accounts = msg.accounts || [];
           // Reconcile idle state: prune stale entries, prefer local state over server
           // (real-time session-idle events are fresher than broadcastState snapshots)
           {
@@ -1045,6 +1060,7 @@
             } catch {}
           }
           renderSidebar();
+          renderAccounts();
           updateStatusBar();
           updateBreadcrumb();
           if (!activeSessionId) renderLandingRecent();
@@ -1494,6 +1510,49 @@
     codexRow.appendChild(modelInput);
     form.appendChild(codexRow);
 
+    // Account selector row (shown when accounts exist)
+    const accountRow = document.createElement('div');
+    accountRow.className = 'inline-account-row';
+
+    const accountSelect = document.createElement('select');
+    accountSelect.className = 'inline-account-select';
+    accountSelect.title = 'Account (optional)';
+    const defaultOpt = document.createElement('option');
+    defaultOpt.value = '';
+    defaultOpt.textContent = 'Default account (no override)';
+    accountSelect.appendChild(defaultOpt);
+
+    // Filter accounts by selected provider
+    function updateAccountOptions() {
+      // Remove all but the default option
+      while (accountSelect.options.length > 1) {
+        accountSelect.remove(1);
+      }
+      const matching = accounts.filter(a => a.provider === selectedProvider);
+      for (const acct of matching) {
+        const opt = document.createElement('option');
+        opt.value = acct.id;
+        opt.textContent = acct.name;
+        accountSelect.appendChild(opt);
+      }
+      // Show/hide account row
+      accountRow.classList.toggle('hidden', accounts.length === 0);
+    }
+
+    accountRow.appendChild(accountSelect);
+    form.appendChild(accountRow);
+    updateAccountOptions();
+
+    // Update account options when provider changes
+    const origProviderClick = {};
+    providerToggle.querySelectorAll('.provider-toggle').forEach(btn => {
+      const originalHandler = btn.onclick;
+      btn.onclick = (e) => {
+        originalHandler(e);
+        updateAccountOptions();
+      };
+    });
+
     ul.insertBefore(form, ul.lastElementChild);
     input.focus();
 
@@ -1504,6 +1563,7 @@
       providerToggle.querySelectorAll('.provider-toggle').forEach(b => b.disabled = true);
       modeSelect.disabled = true;
       modelInput.disabled = true;
+      accountSelect.disabled = true;
 
       let providerOptions = undefined;
       if (selectedProvider === 'codex') {
@@ -1519,7 +1579,8 @@
         if (Object.keys(providerOptions).length === 0) providerOptions = undefined;
       }
 
-      await createSession(projectId, name, selectedProvider, providerOptions);
+      const selectedAccountId = accountSelect.value || undefined;
+      await createSession(projectId, name, selectedProvider, providerOptions, selectedAccountId);
       form.remove();
     };
 
@@ -1539,6 +1600,7 @@
     providerToggle.querySelectorAll('.provider-toggle').forEach(b => b.onkeydown = handleSelectKeydown);
     modeSelect.onkeydown = handleSelectKeydown;
     modelInput.onkeydown = handleKeydown;
+    accountSelect.onkeydown = handleSelectKeydown;
 
     const handleBlur = (e) => {
       if (e.relatedTarget && form.contains(e.relatedTarget)) return;
@@ -1551,6 +1613,7 @@
     providerToggle.querySelectorAll('.provider-toggle').forEach(b => b.onblur = handleBlur);
     modeSelect.onblur = handleBlur;
     modelInput.onblur = handleBlur;
+    accountSelect.onblur = handleBlur;
   }
 
   function startSessionRename(nameEl, sessionId, currentName) {
@@ -1611,9 +1674,10 @@
     await fetch(`/api/projects/${id}`, { method: 'DELETE' });
   }
 
-  async function createSession(projectId, name, provider = 'claude', providerOptions) {
+  async function createSession(projectId, name, provider = 'claude', providerOptions, accountId) {
     const body = { name, provider };
     if (providerOptions) body.providerOptions = providerOptions;
+    if (accountId) body.accountId = accountId;
     let res;
     try {
       res = await fetch(`/api/projects/${projectId}/sessions`, {
@@ -1740,6 +1804,195 @@
         showToast(err.error || 'Failed to restart session', 'error');
       }
     }
+  }
+
+  // --- Account Management ---
+
+  function renderAccounts() {
+    if (!accountListEl) return;
+    accountListEl.innerHTML = '';
+
+    for (const acct of accounts) {
+      const item = document.createElement('div');
+      item.className = 'account-item';
+      item.title = acct.env ? Object.keys(acct.env).join(', ') : 'No env vars configured';
+
+      const badge = document.createElement('span');
+      badge.className = 'account-provider-badge';
+      badge.textContent = acct.provider;
+
+      const nameEl = document.createElement('span');
+      nameEl.className = 'account-name';
+      nameEl.textContent = acct.name;
+
+      const actions = document.createElement('span');
+      actions.className = 'account-actions';
+
+      const editBtn = document.createElement('button');
+      editBtn.className = 'account-action-btn';
+      editBtn.textContent = '\u270E'; // pencil
+      editBtn.title = 'Edit account';
+      editBtn.onclick = (e) => { e.stopPropagation(); openAccountModal(acct); };
+
+      const deleteBtn = document.createElement('button');
+      deleteBtn.className = 'account-action-btn delete';
+      deleteBtn.textContent = '\u00D7'; // ×
+      deleteBtn.title = 'Delete account';
+      deleteBtn.onclick = (e) => {
+        e.stopPropagation();
+        showConfirmDialog(
+          'Delete Account',
+          `Delete account "${acct.name}"? Sessions using this account will keep running but new sessions won't use its credentials.`,
+          async () => {
+            await fetch(`/api/accounts/${acct.id}`, { method: 'DELETE' });
+          }
+        );
+      };
+
+      actions.appendChild(editBtn);
+      actions.appendChild(deleteBtn);
+
+      item.appendChild(badge);
+      item.appendChild(nameEl);
+      item.appendChild(actions);
+
+      item.onclick = () => openAccountModal(acct);
+      accountListEl.appendChild(item);
+    }
+  }
+
+  function addAccountEnvRow(key, value) {
+    const row = document.createElement('div');
+    row.className = 'account-env-row';
+
+    const keyInput = document.createElement('input');
+    keyInput.type = 'text';
+    keyInput.className = 'env-key';
+    keyInput.placeholder = 'ANTHROPIC_API_KEY';
+    keyInput.value = key || '';
+
+    const valInput = document.createElement('input');
+    valInput.type = 'text';
+    valInput.className = 'env-val';
+    valInput.placeholder = 'Value';
+    valInput.value = value || '';
+
+    const removeBtn = document.createElement('button');
+    removeBtn.type = 'button';
+    removeBtn.className = 'btn-remove-env';
+    removeBtn.textContent = '\u00D7';
+    removeBtn.onclick = () => row.remove();
+
+    row.appendChild(keyInput);
+    row.appendChild(valInput);
+    row.appendChild(removeBtn);
+    accountEnvRows.appendChild(row);
+    return keyInput;
+  }
+
+  function openAccountModal(existingAccount) {
+    accountModalOverlay.classList.remove('hidden');
+    accountEnvRows.innerHTML = '';
+
+    if (existingAccount) {
+      accountModalTitle.textContent = 'Edit Account';
+      accountModalId.value = existingAccount.id;
+      accountModalName.value = existingAccount.name;
+      accountModalProvider.value = existingAccount.provider;
+      if (existingAccount.env) {
+        for (const [k, v] of Object.entries(existingAccount.env)) {
+          addAccountEnvRow(k, v);
+        }
+      }
+    } else {
+      accountModalTitle.textContent = 'Add Account';
+      accountModalId.value = '';
+      accountModalName.value = '';
+      accountModalProvider.value = 'claude';
+    }
+    // Always show at least one empty row
+    if (accountEnvRows.children.length === 0) {
+      addAccountEnvRow('', '');
+    }
+    accountModalName.focus();
+  }
+
+  function closeAccountModal() {
+    accountModalOverlay.classList.add('hidden');
+    accountModalId.value = '';
+    accountModalName.value = '';
+    accountEnvRows.innerHTML = '';
+  }
+
+  function collectAccountEnv() {
+    const env = {};
+    const rows = accountEnvRows.querySelectorAll('.account-env-row');
+    for (const row of rows) {
+      const key = row.querySelector('.env-key').value.trim();
+      const val = row.querySelector('.env-val').value.trim();
+      if (key) env[key] = val;
+    }
+    return Object.keys(env).length > 0 ? env : null;
+  }
+
+  async function saveAccount() {
+    const name = accountModalName.value.trim();
+    if (!name) {
+      showToast('Account name is required', 'error');
+      return;
+    }
+    const provider = accountModalProvider.value;
+    const env = collectAccountEnv();
+    const id = accountModalId.value;
+
+    let res;
+    try {
+      if (id) {
+        res = await fetch(`/api/accounts/${id}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, provider, env }),
+        });
+      } else {
+        res = await fetch('/api/accounts', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ name, provider, env }),
+        });
+      }
+    } catch {
+      showToast('Network error saving account', 'error');
+      return;
+    }
+
+    if (!res.ok) {
+      const err = await res.json();
+      showToast(err.error || 'Failed to save account', 'error');
+      return;
+    }
+
+    closeAccountModal();
+  }
+
+  if (btnAddAccount) {
+    btnAddAccount.onclick = () => openAccountModal(null);
+  }
+  if (btnAccountCancel) {
+    btnAccountCancel.onclick = closeAccountModal;
+  }
+  if (btnAccountSave) {
+    btnAccountSave.onclick = saveAccount;
+  }
+  if (btnAccountAddEnv) {
+    btnAccountAddEnv.onclick = () => {
+      const input = addAccountEnvRow('', '');
+      input.focus();
+    };
+  }
+  if (accountModalOverlay) {
+    accountModalOverlay.onclick = (e) => {
+      if (e.target === accountModalOverlay) closeAccountModal();
+    };
   }
 
   // --- Directory Browser ---

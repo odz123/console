@@ -338,6 +338,225 @@ describe('Sessions API (scoped to projects)', () => {
   });
 });
 
+describe('Accounts API', () => {
+  let server;
+  let baseUrl;
+  let projectId;
+
+  before(async () => {
+    server = createServer({ testMode: true });
+    await new Promise((resolve) => server.listen(0, resolve));
+    baseUrl = `http://localhost:${server.address().port}`;
+
+    const res = await fetch(`${baseUrl}/api/projects`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'accounts-test-proj', cwd: process.cwd() }),
+    });
+    const proj = await res.json();
+    projectId = proj.id;
+  });
+
+  after(async () => {
+    await server.destroy();
+  });
+
+  it('GET /api/accounts returns empty list initially', async () => {
+    const res = await fetch(`${baseUrl}/api/accounts`);
+    assert.strictEqual(res.status, 200);
+    const data = await res.json();
+    assert.ok(Array.isArray(data.accounts));
+    assert.strictEqual(data.accounts.length, 0);
+  });
+
+  it('POST /api/accounts creates an account', async () => {
+    const res = await fetch(`${baseUrl}/api/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Work Account',
+        provider: 'claude',
+        env: { ANTHROPIC_API_KEY: 'sk-test-123' },
+      }),
+    });
+    assert.strictEqual(res.status, 201);
+    const acct = await res.json();
+    assert.ok(acct.id);
+    assert.strictEqual(acct.name, 'Work Account');
+    assert.strictEqual(acct.provider, 'claude');
+    assert.deepStrictEqual(acct.env, { ANTHROPIC_API_KEY: 'sk-test-123' });
+  });
+
+  it('POST /api/accounts rejects missing name', async () => {
+    const res = await fetch(`${baseUrl}/api/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ provider: 'claude' }),
+    });
+    assert.strictEqual(res.status, 400);
+  });
+
+  it('POST /api/accounts rejects invalid provider', async () => {
+    const res = await fetch(`${baseUrl}/api/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'bad', provider: 'invalid' }),
+    });
+    assert.strictEqual(res.status, 400);
+  });
+
+  it('POST /api/accounts rejects disallowed env keys', async () => {
+    const res = await fetch(`${baseUrl}/api/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'bad', env: { PATH: '/evil' } }),
+    });
+    assert.strictEqual(res.status, 400);
+    const data = await res.json();
+    assert.ok(data.error.includes('not allowed'));
+  });
+
+  it('POST /api/accounts accepts codex env vars', async () => {
+    const res = await fetch(`${baseUrl}/api/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Codex Account',
+        provider: 'codex',
+        env: { OPENAI_API_KEY: 'sk-openai-test' },
+      }),
+    });
+    assert.strictEqual(res.status, 201);
+    const acct = await res.json();
+    assert.strictEqual(acct.provider, 'codex');
+    assert.deepStrictEqual(acct.env, { OPENAI_API_KEY: 'sk-openai-test' });
+  });
+
+  it('POST /api/accounts accepts bedrock env vars', async () => {
+    const res = await fetch(`${baseUrl}/api/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        name: 'Bedrock Account',
+        provider: 'claude',
+        env: {
+          CLAUDE_CODE_USE_BEDROCK: '1',
+          AWS_PROFILE: 'my-bedrock-profile',
+          AWS_REGION: 'us-east-1',
+        },
+      }),
+    });
+    assert.strictEqual(res.status, 201);
+    const acct = await res.json();
+    assert.deepStrictEqual(acct.env, {
+      CLAUDE_CODE_USE_BEDROCK: '1',
+      AWS_PROFILE: 'my-bedrock-profile',
+      AWS_REGION: 'us-east-1',
+    });
+  });
+
+  it('PUT /api/accounts/:id updates an account', async () => {
+    // Create first
+    const createRes = await fetch(`${baseUrl}/api/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'To Update', provider: 'claude' }),
+    });
+    const { id } = await createRes.json();
+
+    const res = await fetch(`${baseUrl}/api/accounts/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Updated Name', env: { ANTHROPIC_API_KEY: 'sk-new' } }),
+    });
+    assert.strictEqual(res.status, 200);
+    const acct = await res.json();
+    assert.strictEqual(acct.name, 'Updated Name');
+    assert.deepStrictEqual(acct.env, { ANTHROPIC_API_KEY: 'sk-new' });
+  });
+
+  it('PUT /api/accounts/:id returns 404 for missing account', async () => {
+    const res = await fetch(`${baseUrl}/api/accounts/nonexistent`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'x' }),
+    });
+    assert.strictEqual(res.status, 404);
+  });
+
+  it('DELETE /api/accounts/:id removes account', async () => {
+    const createRes = await fetch(`${baseUrl}/api/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'To Delete', provider: 'claude' }),
+    });
+    const { id } = await createRes.json();
+
+    const res = await fetch(`${baseUrl}/api/accounts/${id}`, { method: 'DELETE' });
+    assert.strictEqual(res.status, 200);
+
+    const getRes = await fetch(`${baseUrl}/api/accounts`);
+    const { accounts } = await getRes.json();
+    assert.ok(!accounts.find(a => a.id === id));
+  });
+
+  it('GET /api/projects includes accounts', async () => {
+    const res = await fetch(`${baseUrl}/api/projects`);
+    const data = await res.json();
+    assert.ok(Array.isArray(data.accounts), 'GET /api/projects should include accounts array');
+  });
+
+  it('POST /api/projects/:id/sessions with accountId', async () => {
+    // Create an account
+    const acctRes = await fetch(`${baseUrl}/api/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Session Account', provider: 'claude' }),
+    });
+    const acct = await acctRes.json();
+
+    // Create session with account
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'acct-session', accountId: acct.id }),
+    });
+    assert.strictEqual(res.status, 201);
+    const session = await res.json();
+    assert.strictEqual(session.accountId, acct.id);
+    assert.strictEqual(session.provider, 'claude');
+  });
+
+  it('POST /api/projects/:id/sessions with accountId inherits provider', async () => {
+    // Create a codex account
+    const acctRes = await fetch(`${baseUrl}/api/accounts`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'Codex Acc', provider: 'codex' }),
+    });
+    const acct = await acctRes.json();
+
+    // Create session without explicit provider — should inherit from account
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'inherit-provider-session', accountId: acct.id }),
+    });
+    assert.strictEqual(res.status, 201);
+    const session = await res.json();
+    assert.strictEqual(session.provider, 'codex');
+  });
+
+  it('POST /api/projects/:id/sessions rejects unknown accountId', async () => {
+    const res = await fetch(`${baseUrl}/api/projects/${projectId}/sessions`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ name: 'bad-acct', accountId: 'nonexistent' }),
+    });
+    assert.strictEqual(res.status, 400);
+  });
+});
+
 describe('Git Worktree Integration', () => {
   let server;
   let baseUrl;

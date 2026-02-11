@@ -24,9 +24,9 @@ describe('Store: database setup', () => {
     assert.deepStrictEqual(store.getProjects(), []);
   });
 
-  it('getAll returns empty projects and sessions on fresh db', () => {
+  it('getAll returns empty projects, sessions, and accounts on fresh db', () => {
     const store = createStore(':memory:');
-    assert.deepStrictEqual(store.getAll(), { projects: [], sessions: [] });
+    assert.deepStrictEqual(store.getAll(), { projects: [], sessions: [], accounts: [] });
   });
 });
 
@@ -264,6 +264,140 @@ describe('Store: session CRUD', () => {
     });
     assert.strictEqual(session.providerOptions.approvalMode, 'auto-edit');
     assert.strictEqual(session.providerOptions.model, undefined);
+  });
+
+  it('createSession with accountId', () => {
+    const store = storeWithProject();
+    store.createAccount({
+      id: 'a1', name: 'Work Account', provider: 'claude',
+      env: { ANTHROPIC_API_KEY: 'sk-test-123' },
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    const session = store.createSession({
+      id: 's1', projectId: 'p1', name: 'with-account',
+      accountId: 'a1',
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.strictEqual(session.accountId, 'a1');
+  });
+
+  it('createSession defaults accountId to null', () => {
+    const store = storeWithProject();
+    const session = store.createSession({
+      id: 's1', projectId: 'p1', name: 'no-account',
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.strictEqual(session.accountId, null);
+  });
+});
+
+describe('Store: account CRUD', () => {
+  it('createAccount and getAccount', () => {
+    const store = createStore(':memory:');
+    const account = store.createAccount({
+      id: 'a1', name: 'Work', provider: 'claude',
+      env: { ANTHROPIC_API_KEY: 'sk-test' },
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.strictEqual(account.id, 'a1');
+    assert.strictEqual(account.name, 'Work');
+    assert.strictEqual(account.provider, 'claude');
+    assert.deepStrictEqual(account.env, { ANTHROPIC_API_KEY: 'sk-test' });
+
+    const fetched = store.getAccount('a1');
+    assert.deepStrictEqual(fetched, account);
+  });
+
+  it('getAccount returns undefined for missing id', () => {
+    const store = createStore(':memory:');
+    assert.strictEqual(store.getAccount('nonexistent'), undefined);
+  });
+
+  it('getAccounts returns all accounts ordered by createdAt', () => {
+    const store = createStore(':memory:');
+    store.createAccount({ id: 'a2', name: 'second', provider: 'codex', createdAt: '2026-02-06T01:00:00.000Z' });
+    store.createAccount({ id: 'a1', name: 'first', provider: 'claude', createdAt: '2026-02-06T00:00:00.000Z' });
+    const accts = store.getAccounts();
+    assert.strictEqual(accts.length, 2);
+    assert.strictEqual(accts[0].id, 'a1');
+    assert.strictEqual(accts[1].id, 'a2');
+  });
+
+  it('createAccount with null env', () => {
+    const store = createStore(':memory:');
+    const account = store.createAccount({
+      id: 'a1', name: 'No Env', provider: 'claude',
+      env: null,
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.strictEqual(account.env, null);
+  });
+
+  it('createAccount defaults provider to claude', () => {
+    const store = createStore(':memory:');
+    const account = store.createAccount({
+      id: 'a1', name: 'Default',
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.strictEqual(account.provider, 'claude');
+  });
+
+  it('updateAccount updates name and provider', () => {
+    const store = createStore(':memory:');
+    store.createAccount({
+      id: 'a1', name: 'Original', provider: 'claude',
+      env: { ANTHROPIC_API_KEY: 'sk-old' },
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    const updated = store.updateAccount('a1', { name: 'Updated', provider: 'codex' });
+    assert.strictEqual(updated.name, 'Updated');
+    assert.strictEqual(updated.provider, 'codex');
+    // env should be preserved
+    assert.deepStrictEqual(updated.env, { ANTHROPIC_API_KEY: 'sk-old' });
+  });
+
+  it('updateAccount updates env', () => {
+    const store = createStore(':memory:');
+    store.createAccount({
+      id: 'a1', name: 'Test', provider: 'claude',
+      env: { ANTHROPIC_API_KEY: 'sk-old' },
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    const updated = store.updateAccount('a1', { env: { ANTHROPIC_API_KEY: 'sk-new' } });
+    assert.deepStrictEqual(updated.env, { ANTHROPIC_API_KEY: 'sk-new' });
+  });
+
+  it('updateAccount returns undefined for missing id', () => {
+    const store = createStore(':memory:');
+    assert.strictEqual(store.updateAccount('nonexistent', { name: 'x' }), undefined);
+  });
+
+  it('deleteAccount removes account', () => {
+    const store = createStore(':memory:');
+    store.createAccount({ id: 'a1', name: 'ToDelete', provider: 'claude', createdAt: '2026-02-06T00:00:00.000Z' });
+    store.deleteAccount('a1');
+    assert.strictEqual(store.getAccount('a1'), undefined);
+  });
+
+  it('getAll includes accounts', () => {
+    const store = createStore(':memory:');
+    store.createAccount({ id: 'a1', name: 'Acc', provider: 'claude', createdAt: '2026-02-06T00:00:00.000Z' });
+    const all = store.getAll();
+    assert.strictEqual(all.accounts.length, 1);
+    assert.strictEqual(all.accounts[0].id, 'a1');
+  });
+
+  it('deleting account sets session accountId to null', () => {
+    const store = createStore(':memory:');
+    store.createProject({ id: 'p1', name: 'proj', cwd: '/tmp', createdAt: '2026-02-06T00:00:00.000Z' });
+    store.createAccount({ id: 'a1', name: 'Acc', provider: 'claude', createdAt: '2026-02-06T00:00:00.000Z' });
+    store.createSession({
+      id: 's1', projectId: 'p1', name: 'sess', accountId: 'a1',
+      createdAt: '2026-02-06T00:00:00.000Z',
+    });
+    assert.strictEqual(store.getSession('s1').accountId, 'a1');
+    store.deleteAccount('a1');
+    assert.strictEqual(store.getSession('s1').accountId, null);
   });
 });
 

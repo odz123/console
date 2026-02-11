@@ -125,7 +125,7 @@ export class PtyManager {
     this.shellProcesses = new Map();
   }
 
-  spawn(sessionId, { cwd, resumeId, cols = 80, rows = 24, shell, args, provider = 'claude', providerOptions }) {
+  spawn(sessionId, { cwd, resumeId, cols = 80, rows = 24, shell, args, provider = 'claude', providerOptions, accountEnv }) {
     if (this.processes.has(sessionId)) {
       throw new Error(`Session ${sessionId} already exists`);
     }
@@ -165,7 +165,7 @@ export class PtyManager {
       cols,
       rows,
       cwd,
-      env: { ...process.env, TERM: 'xterm-256color' },
+      env: { ...process.env, ...accountEnv, TERM: 'xterm-256color' },
     });
 
     const proc = new PtyProcess(ptyProcess);
