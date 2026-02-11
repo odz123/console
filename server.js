@@ -465,6 +465,70 @@ export function createServer({ testMode = false } = {}) {
     res.type('text/plain').send(content.toString('utf-8'));
   });
 
+  // --- File mtime (for auto-reload detection) ---
+
+  app.get('/api/file/mtime', async (req, res) => {
+    const { sessionId, path: filePath } = req.query;
+
+    if (!sessionId || typeof sessionId !== 'string') {
+      return res.status(400).json({ error: 'sessionId is required' });
+    }
+    if (!filePath || typeof filePath !== 'string') {
+      return res.status(400).json({ error: 'path is required' });
+    }
+    if (path.isAbsolute(filePath)) {
+      return res.status(403).json({ error: 'Absolute paths not allowed' });
+    }
+    const normalized = path.normalize(filePath);
+    if (normalized === '..' || normalized.startsWith(`..${path.sep}`)) {
+      return res.status(403).json({ error: 'Path traversal not allowed' });
+    }
+
+    const session = store.getSession(sessionId);
+    if (!session) return res.status(404).json({ error: 'Session not found' });
+
+    const project = store.getProject(session.projectId);
+    if (!project) return res.status(404).json({ error: 'Project not found' });
+
+    let worktreeRoot;
+    if (session.worktreePath) {
+      try {
+        worktreeRoot = await resolveWorktreePath(project.cwd, session.worktreePath);
+      } catch {
+        return res.status(400).json({ error: 'Invalid worktree path' });
+      }
+    } else {
+      worktreeRoot = project.cwd;
+    }
+
+    const resolved = path.resolve(worktreeRoot, normalized);
+
+    let realResolved;
+    try {
+      realResolved = await fs.promises.realpath(resolved);
+    } catch {
+      return res.status(404).json({ error: 'File not found' });
+    }
+
+    let realRoot;
+    try {
+      realRoot = await fs.promises.realpath(worktreeRoot);
+    } catch {
+      return res.status(400).json({ error: 'Worktree root not found' });
+    }
+
+    if (!realResolved.startsWith(realRoot + path.sep) && realResolved !== realRoot) {
+      return res.status(403).json({ error: 'Path escapes worktree' });
+    }
+
+    try {
+      const stat = await fs.promises.stat(realResolved);
+      res.json({ mtime: stat.mtimeMs });
+    } catch {
+      return res.status(404).json({ error: 'File not found' });
+    }
+  });
+
   // --- File Write ---
 
   app.post('/api/file', express.json({ limit: '2mb' }), async (req, res) => {

@@ -80,6 +80,7 @@
           <textarea id="prompt-input" class="prompt-input" rows="1" placeholder="Type a message... (@ to mention files)" autocomplete="off"></textarea>
           <button id="prompt-send" class="prompt-send" title="Send (Enter)">Send</button>
         </div>
+        <div id="prompt-image-previews" class="prompt-image-previews hidden"></div>
         <div id="prompt-file-chips" class="prompt-file-chips hidden"></div>
         <div id="file-autocomplete" class="file-autocomplete hidden"></div>
       </div>
@@ -253,23 +254,30 @@
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find in terminal / file</span></div>
           <div class="shortcut-row"><kbd>Esc</kbd><span>Stop / close modal</span></div>
           <div class="shortcut-row"><kbd>/</kbd> in prompt<span>Quick actions menu</span></div>
-          <div class="shortcut-row">Prompt bar<span>Type messages, Enter to send</span></div>
+          <div class="shortcut-row"><kbd>@</kbd> in prompt<span>File mention autocomplete</span></div>
+          <div class="shortcut-row"><kbd>&uarr;</kbd>/<kbd>&darr;</kbd> in prompt<span>Prompt history</span></div>
+          <div class="shortcut-row">Prompt bar<span>Paste images, drag files</span></div>
         </div>
         <div class="shortcuts-section">
           <h3>Tabs</h3>
           <div class="shortcut-row"><kbd>Right-click</kbd> tab<span>Close / Close Others / Copy Path</span></div>
           <div class="shortcut-row"><kbd>Drag</kbd> tab<span>Reorder tabs</span></div>
+          <div class="shortcut-row"><kbd>Right-click</kbd> session<span>Session context menu</span></div>
         </div>
         <div class="shortcuts-section">
           <h3>File Tree</h3>
           <div class="shortcut-row"><kbd>Click</kbd> folder<span>Expand / collapse</span></div>
           <div class="shortcut-row"><kbd>Click</kbd> file<span>Open in tab</span></div>
+          <div class="shortcut-row"><kbd>&uarr;</kbd>/<kbd>&darr;</kbd>/<kbd>j</kbd>/<kbd>k</kbd><span>Navigate file tree</span></div>
+          <div class="shortcut-row"><kbd>Enter</kbd><span>Open file / toggle folder</span></div>
+          <div class="shortcut-row"><kbd>Drag</kbd> file<span>Drop into prompt bar</span></div>
           <div class="shortcut-row">Filter input<span>Search files by name</span></div>
         </div>
         <div class="shortcuts-section">
           <h3>Git Panel</h3>
           <div class="shortcut-row"><kbd>Click</kbd> file row<span>View diff</span></div>
           <div class="shortcut-row"><kbd>Enter</kbd> in commit<span>Commit staged</span></div>
+          <div class="shortcut-row"><kbd>Preview</kbd> button<span>Preview staged diff</span></div>
         </div>
       </div>
     </div>

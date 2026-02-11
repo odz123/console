@@ -181,6 +181,12 @@
   // Attached files state for prompt bar
   let attachedFiles = [];
 
+  // Prompt history state
+  const promptHistory = [];
+  let promptHistoryIdx = -1;
+  let promptHistoryDraft = '';
+  const MAX_PROMPT_HISTORY = 50;
+
   // Git diff preview ref
   const gitDiffPreview = document.getElementById('git-diff-preview');
   const btnGitPreview = document.getElementById('btn-git-preview');
@@ -1349,6 +1355,8 @@
           attachSession(s.id);
         };
 
+        li.oncontextmenu = (e) => showSessionContextMenu(e, s);
+
         ul.appendChild(li);
       }
 
@@ -2220,6 +2228,7 @@
       return;
     }
     dirtyTabs.delete(tabId);
+    stopWatchingFile(tabId);
     openTabs = openTabs.filter(t => t.id !== tabId);
     if (activeTabId === tabId) {
       activeTabId = openTabs.length > 0 ? openTabs[openTabs.length - 1].id : 'claude';
@@ -2362,6 +2371,10 @@
     if (tab) {
       openTabs.push(tab);
       switchTab(tab.id);
+      // Start watching for external changes
+      if (tab.type === 'text' || tab.type === 'markdown') {
+        startWatchingFile(tab.id, tab.fullPath);
+      }
     }
   }
 
@@ -3650,6 +3663,14 @@
       text = refs + ' ' + text;
     }
     if (!text.trim()) return;
+    // Save to prompt history
+    const raw = promptInput.value.trim();
+    if (raw && (promptHistory.length === 0 || promptHistory[promptHistory.length - 1] !== raw)) {
+      promptHistory.push(raw);
+      if (promptHistory.length > MAX_PROMPT_HISTORY) promptHistory.shift();
+    }
+    promptHistoryIdx = -1;
+    promptHistoryDraft = '';
     // Send text to terminal followed by Enter
     wsSend(JSON.stringify({ type: 'input', data: text + '\r' }));
     promptInput.value = '';
@@ -3681,6 +3702,37 @@
       if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         sendPromptInput();
+      }
+      // Up/Down arrow — prompt history navigation (only when cursor is at line boundary)
+      if (e.key === 'ArrowUp' && promptHistory.length > 0) {
+        const beforeCursor = promptInput.value.substring(0, promptInput.selectionStart);
+        if (!beforeCursor.includes('\n')) { // only at first line
+          e.preventDefault();
+          if (promptHistoryIdx === -1) {
+            promptHistoryDraft = promptInput.value;
+            promptHistoryIdx = promptHistory.length - 1;
+          } else if (promptHistoryIdx > 0) {
+            promptHistoryIdx--;
+          }
+          promptInput.value = promptHistory[promptHistoryIdx];
+          promptInput.selectionStart = promptInput.selectionEnd = promptInput.value.length;
+          return;
+        }
+      }
+      if (e.key === 'ArrowDown' && promptHistoryIdx >= 0) {
+        const afterCursor = promptInput.value.substring(promptInput.selectionEnd);
+        if (!afterCursor.includes('\n')) { // only at last line
+          e.preventDefault();
+          if (promptHistoryIdx < promptHistory.length - 1) {
+            promptHistoryIdx++;
+            promptInput.value = promptHistory[promptHistoryIdx];
+          } else {
+            promptHistoryIdx = -1;
+            promptInput.value = promptHistoryDraft;
+          }
+          promptInput.selectionStart = promptInput.selectionEnd = promptInput.value.length;
+          return;
+        }
       }
       // Escape focuses terminal
       if (e.key === 'Escape') {
@@ -3973,6 +4025,11 @@
         { icon: '\u266A', label: 'Toggle Notifications', meta: notificationsEnabled ? 'on' : 'off', action: () => { closeCommandPalette(); toggleNotifications(); } },
         { icon: '\u2398', label: 'Find in Terminal', meta: 'Ctrl+F', action: () => { closeCommandPalette(); openTermSearch(); } },
         { icon: '\u2398', label: 'Clone Session', meta: 'duplicate', action: () => { closeCommandPalette(); cloneSession(activeSessionId); } },
+        { icon: '\u2630', label: 'Focus File Tree', meta: 'keyboard nav', action: () => {
+          closeCommandPalette();
+          const treeSection = document.getElementById('file-tree-section');
+          if (treeSection) treeSection.focus();
+        }},
       );
     }
 
@@ -4971,9 +5028,306 @@
     };
   }
 
+  // --- Image paste into prompt ---
+  const promptImagePreviews = document.getElementById('prompt-image-previews');
+  let pastedImages = []; // {name, dataUrl, blob}
+
+  if (promptInput) {
+    promptInput.addEventListener('paste', (e) => {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const blob = item.getAsFile();
+          if (!blob) continue;
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = reader.result;
+            const name = `pasted-image-${pastedImages.length + 1}.png`;
+            pastedImages.push({ name, dataUrl, blob });
+            renderImagePreviews();
+          };
+          reader.readAsDataURL(blob);
+          break; // only handle first image
+        }
+      }
+    });
+  }
+
+  function renderImagePreviews() {
+    if (!promptImagePreviews) return;
+    promptImagePreviews.innerHTML = '';
+    if (pastedImages.length === 0) {
+      promptImagePreviews.classList.add('hidden');
+      return;
+    }
+    promptImagePreviews.classList.remove('hidden');
+    for (let i = 0; i < pastedImages.length; i++) {
+      const img = pastedImages[i];
+      const container = document.createElement('div');
+      container.className = 'prompt-image-preview';
+      const thumb = document.createElement('img');
+      thumb.src = img.dataUrl;
+      thumb.alt = img.name;
+      thumb.title = img.name;
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'prompt-image-remove';
+      removeBtn.textContent = '\u00D7';
+      removeBtn.onclick = () => {
+        pastedImages.splice(i, 1);
+        renderImagePreviews();
+      };
+      container.appendChild(thumb);
+      container.appendChild(removeBtn);
+      promptImagePreviews.appendChild(container);
+    }
+  }
+
+  // --- Keyboard file tree navigation ---
+  let fileTreeFocusedItem = null;
+
+  function initFileTreeKeyboard() {
+    const treeSection = document.getElementById('file-tree-section');
+    if (!treeSection) return;
+
+    // Make file tree section focusable
+    treeSection.setAttribute('tabindex', '-1');
+
+    treeSection.addEventListener('keydown', (e) => {
+      const allItems = [...fileTreeEl.querySelectorAll('.file-tree-item:not(.filter-hidden)')];
+      if (allItems.length === 0) return;
+
+      let currentIdx = fileTreeFocusedItem ? allItems.indexOf(fileTreeFocusedItem) : -1;
+
+      if (e.key === 'ArrowDown' || e.key === 'j') {
+        e.preventDefault();
+        currentIdx = Math.min(currentIdx + 1, allItems.length - 1);
+        focusFileTreeItem(allItems, currentIdx);
+      } else if (e.key === 'ArrowUp' || e.key === 'k') {
+        e.preventDefault();
+        currentIdx = Math.max(currentIdx - 1, 0);
+        focusFileTreeItem(allItems, currentIdx);
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        if (fileTreeFocusedItem) fileTreeFocusedItem.click();
+      } else if (e.key === 'ArrowRight' || e.key === 'l') {
+        // Expand folder
+        if (fileTreeFocusedItem && fileTreeFocusedItem.classList.contains('file-tree-folder')) {
+          const arrow = fileTreeFocusedItem.querySelector('.file-tree-arrow');
+          if (arrow && arrow.textContent === '\u25B6') {
+            e.preventDefault();
+            fileTreeFocusedItem.click();
+          }
+        }
+      } else if (e.key === 'ArrowLeft' || e.key === 'h') {
+        // Collapse folder
+        if (fileTreeFocusedItem && fileTreeFocusedItem.classList.contains('file-tree-folder')) {
+          const arrow = fileTreeFocusedItem.querySelector('.file-tree-arrow');
+          if (arrow && arrow.textContent === '\u25BC') {
+            e.preventDefault();
+            fileTreeFocusedItem.click();
+          }
+        }
+      } else if (e.key === 'Escape') {
+        clearFileTreeFocus();
+        term.focus();
+      }
+    });
+  }
+
+  function focusFileTreeItem(allItems, idx) {
+    if (fileTreeFocusedItem) fileTreeFocusedItem.classList.remove('file-tree-focused');
+    fileTreeFocusedItem = allItems[idx];
+    if (fileTreeFocusedItem) {
+      fileTreeFocusedItem.classList.add('file-tree-focused');
+      fileTreeFocusedItem.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function clearFileTreeFocus() {
+    if (fileTreeFocusedItem) {
+      fileTreeFocusedItem.classList.remove('file-tree-focused');
+      fileTreeFocusedItem = null;
+    }
+  }
+
+  // --- Session context menu ---
+  function showSessionContextMenu(e, session) {
+    e.preventDefault();
+    // Remove any existing context menu
+    const existing = document.getElementById('session-context-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'session-context-menu';
+    menu.className = 'context-menu';
+
+    const items = [
+      { label: 'Rename', action: () => {
+        const nameEl = projectListEl.querySelector(`li[data-session-id="${session.id}"] .session-name`);
+        if (nameEl) startSessionRename(nameEl, session.id, session.name);
+      }},
+      { label: pinnedSessions.has(session.id) ? 'Unpin' : 'Pin to Top', action: () => togglePinSession(session.id) },
+      { label: 'Clone', action: () => cloneSession(session.id) },
+      { type: 'separator' },
+      { label: 'Copy Session ID', action: () => {
+        navigator.clipboard.writeText(session.id);
+        showToast('Session ID copied', 'success', 2000);
+      }},
+      { label: 'Copy Branch Name', action: () => {
+        if (session.branchName) {
+          navigator.clipboard.writeText(session.branchName);
+          showToast('Branch name copied', 'success', 2000);
+        }
+      }, disabled: !session.branchName },
+    ];
+
+    if (session.worktreePath) {
+      items.push({ type: 'separator' });
+      items.push({ label: 'Archive', action: () => archiveSession(session.id, session.branchName) });
+    }
+
+    items.push({ type: 'separator' });
+    items.push({ label: 'Delete', className: 'context-menu-danger', action: () => deleteSession(session.id) });
+
+    for (const item of items) {
+      if (item.type === 'separator') {
+        const sep = document.createElement('div');
+        sep.className = 'context-menu-separator';
+        menu.appendChild(sep);
+        continue;
+      }
+      const el = document.createElement('div');
+      el.className = 'context-menu-item' + (item.className ? ' ' + item.className : '') + (item.disabled ? ' disabled' : '');
+      el.textContent = item.label;
+      if (!item.disabled) {
+        el.onclick = () => {
+          menu.remove();
+          item.action();
+        };
+      }
+      menu.appendChild(el);
+    }
+
+    // Position near cursor, clamping to viewport
+    document.body.appendChild(menu);
+    const menuRect = menu.getBoundingClientRect();
+    let top = e.clientY;
+    let left = e.clientX;
+    if (top + menuRect.height > window.innerHeight) top = window.innerHeight - menuRect.height - 4;
+    if (left + menuRect.width > window.innerWidth) left = window.innerWidth - menuRect.width - 4;
+    menu.style.top = top + 'px';
+    menu.style.left = left + 'px';
+
+    // Close on outside click
+    const closeCtx = (ev) => {
+      if (!menu.contains(ev.target)) {
+        menu.remove();
+        document.removeEventListener('mousedown', closeCtx);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', closeCtx), 0);
+  }
+
+  // --- Enhanced file viewer breadcrumb navigation ---
+  // The existing renderFileViewerBreadcrumb already makes directory segments clickable to
+  // expand the file tree. We enhance it to also navigate to the parent folder in the file list
+  // (already implemented in the existing code, enhancement is the browse-to-folder ability).
+
+  // --- Auto-reload for externally changed files ---
+  let fileWatchTimers = new Map(); // tabId -> {timer, mtime}
+
+  function startWatchingFile(tabId, filePath) {
+    stopWatchingFile(tabId);
+    const timer = setInterval(async () => {
+      if (!activeSessionId) return;
+      try {
+        const res = await fetch(`/api/file/mtime?sessionId=${activeSessionId}&path=${encodeURIComponent(filePath)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const entry = fileWatchTimers.get(tabId);
+        if (!entry) return;
+        if (entry.mtime && data.mtime && data.mtime !== entry.mtime) {
+          // File changed externally
+          entry.mtime = data.mtime;
+          const tab = openTabs.find(t => t.id === tabId);
+          if (tab && !dirtyTabs.has(tabId)) {
+            showFileChangedBanner(tabId, filePath);
+          }
+        }
+        if (!entry.mtime && data.mtime) {
+          entry.mtime = data.mtime;
+        }
+      } catch { /* ignore poll errors */ }
+    }, 5000); // poll every 5 seconds
+    fileWatchTimers.set(tabId, { timer, mtime: null });
+  }
+
+  function stopWatchingFile(tabId) {
+    const entry = fileWatchTimers.get(tabId);
+    if (entry) {
+      clearInterval(entry.timer);
+      fileWatchTimers.delete(tabId);
+    }
+  }
+
+  function showFileChangedBanner(tabId, filePath) {
+    // Only show for active tab
+    if (tabId !== activeTabId) return;
+    // Check if banner already exists
+    if (document.getElementById('file-changed-banner')) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'file-changed-banner';
+    banner.className = 'file-changed-banner';
+    banner.innerHTML = '<span>File changed on disk.</span>';
+
+    const reloadBtn = document.createElement('button');
+    reloadBtn.textContent = 'Reload';
+    reloadBtn.onclick = async () => {
+      banner.remove();
+      const tab = openTabs.find(t => t.id === tabId);
+      if (tab) {
+        await refreshFileTab(tab);
+      }
+    };
+
+    const dismissBtn = document.createElement('button');
+    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.onclick = () => banner.remove();
+
+    banner.appendChild(reloadBtn);
+    banner.appendChild(dismissBtn);
+
+    const fvHeader = document.querySelector('.file-viewer-header');
+    if (fvHeader) {
+      fvHeader.parentElement.insertBefore(banner, fvHeader.nextSibling);
+    }
+  }
+
+  async function refreshFileTab(tab) {
+    if (!activeSessionId || !tab) return;
+    try {
+      const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(tab.fullPath)}`);
+      if (!res.ok) return;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('text/plain')) {
+        tab.content = await res.text();
+        tab.type = 'text';
+      } else if (contentType.includes('image/')) {
+        const blob = await res.blob();
+        tab.imageUrl = URL.createObjectURL(blob);
+        tab.type = 'image';
+      }
+      if (tab.id === activeTabId) renderFileContent(tab);
+    } catch { /* ignore */ }
+  }
+
   // --- Init ---
   initTerminal();
   initShellTerminal();
+  initFileTreeKeyboard();
   startSidebarTimeUpdates();
   updateFontSizeDisplay();
   connect();
