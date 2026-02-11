@@ -60,6 +60,12 @@
           <button id="fv-search-prev" class="fv-search-btn" title="Previous">&uarr;</button>
           <button id="fv-search-next" class="fv-search-btn" title="Next">&darr;</button>
           <button id="fv-search-close" class="fv-search-btn" title="Close">&times;</button>
+          <div id="fv-replace-row" class="fv-replace-row hidden">
+            <input id="fv-replace-input" type="text" placeholder="Replace with..." autocomplete="off">
+            <button id="fv-replace-one" class="fv-search-btn" title="Replace">Replace</button>
+            <button id="fv-replace-all" class="fv-search-btn" title="Replace All">All</button>
+          </div>
+          <button id="fv-search-toggle-replace" class="fv-search-btn fv-toggle-replace" title="Toggle Replace">&darr;</button>
         </div>
         <div id="file-viewer-content"></div>
       </div>
@@ -74,6 +80,15 @@
             <span class="landing-hint">Click a session in the sidebar to resume</span>
           </div>
         </div>
+      </div>
+      <div id="prompt-bar" class="prompt-bar hidden">
+        <div class="prompt-bar-inner">
+          <textarea id="prompt-input" class="prompt-input" rows="1" placeholder="Type a message... (@ to mention files)" autocomplete="off"></textarea>
+          <button id="prompt-send" class="prompt-send" title="Send (Enter)">Send</button>
+        </div>
+        <div id="prompt-image-previews" class="prompt-image-previews hidden"></div>
+        <div id="prompt-file-chips" class="prompt-file-chips hidden"></div>
+        <div id="file-autocomplete" class="file-autocomplete hidden"></div>
       </div>
       <div id="status-bar" class="hidden">
         <div class="status-bar-left">
@@ -91,6 +106,9 @@
           <span class="status-sep">|</span>
           <span id="status-connection" class="status-item"></span>
           <span class="status-sep status-sep-controls">|</span>
+          <button id="status-notify" class="status-btn" title="Toggle browser notifications">Notify</button>
+          <button id="status-theme" class="status-btn" title="Toggle light/dark theme">Theme</button>
+          <button id="status-export" class="status-btn" title="Export session output">Export</button>
           <button id="status-interrupt" class="status-btn" title="Send interrupt (Ctrl+C)">Interrupt</button>
           <button id="status-compact" class="status-btn" title="Send /compact to reduce context">Compact</button>
           <button id="status-restart" class="status-btn status-btn-restart hidden" title="Restart session">Restart</button>
@@ -106,6 +124,8 @@
             <button class="rp-tab" data-rp-tab="git">Git</button>
           </div>
           <span id="right-panel-path"></span>
+          <button id="btn-expand-all" class="panel-toggle" title="Expand all folders">&#x25BD;</button>
+          <button id="btn-collapse-all" class="panel-toggle" title="Collapse all folders">&#x25B7;</button>
           <button id="btn-refresh-file-tree" class="panel-toggle" title="Refresh file tree">&#x21BB;</button>
           <button id="btn-toggle-file-tree" class="panel-toggle" title="Collapse file tree">&#x25BC;</button>
         </div>
@@ -122,8 +142,12 @@
           </div>
           <div id="git-commit-form" class="git-commit-form">
             <input id="git-commit-message" type="text" placeholder="Commit message..." maxlength="500">
-            <button id="btn-git-commit" class="git-commit-btn" disabled>Commit</button>
+            <div class="git-commit-actions">
+              <button id="btn-git-preview" class="git-preview-btn" title="Preview staged diff">Preview</button>
+              <button id="btn-git-commit" class="git-commit-btn" disabled>Commit</button>
+            </div>
           </div>
+          <div id="git-diff-preview" class="git-diff-preview hidden"></div>
           <div id="git-file-list" class="git-file-list"></div>
           <div id="git-log-section" class="git-log-section collapsed">
             <div class="git-log-header">
@@ -180,8 +204,46 @@
     </div>
   </div>
 
-  <!-- Scroll to bottom button -->
-  <button id="scroll-to-bottom" class="scroll-to-bottom hidden" title="Scroll to bottom">&#x25BC;</button>
+  <!-- Quick file open (Ctrl+P) -->
+  <div id="quick-open-overlay" class="quick-open-overlay hidden">
+    <div class="quick-open-panel">
+      <input id="quick-open-input" type="text" placeholder="Go to file..." autocomplete="off">
+      <div id="quick-open-results" class="quick-open-results"></div>
+    </div>
+  </div>
+
+  <!-- File preview tooltip -->
+  <div id="file-preview-tooltip" class="file-preview-tooltip hidden"></div>
+
+  <!-- Scroll to bottom button with line count -->
+  <button id="scroll-to-bottom" class="scroll-to-bottom hidden" title="Scroll to bottom">
+    <span id="scroll-line-count" class="scroll-line-count"></span>
+    <span>&#x25BC;</span>
+  </button>
+
+  <!-- Stop button overlay (shown when Claude is working) -->
+  <button id="stop-btn" class="stop-btn hidden" title="Stop Claude (Esc)">Stop</button>
+
+  <!-- Quick actions menu (anchored to prompt bar) -->
+  <div id="quick-actions" class="quick-actions hidden">
+    <div class="qa-header">Quick Actions</div>
+    <button class="qa-item" data-action="/review">Review code</button>
+    <button class="qa-item" data-action="/test">Write tests</button>
+    <button class="qa-item" data-action="/fix">Fix bugs</button>
+    <button class="qa-item" data-action="/explain">Explain code</button>
+    <button class="qa-item" data-action="/refactor">Refactor</button>
+    <button class="qa-item" data-action="/docs">Add documentation</button>
+    <button class="qa-item" data-action="/compact">Compact context</button>
+  </div>
+
+  <!-- Terminal search bar -->
+  <div id="term-search-bar" class="term-search-bar hidden">
+    <input id="term-search-input" type="text" placeholder="Find in terminal..." autocomplete="off">
+    <span id="term-search-count" class="term-search-count"></span>
+    <button id="term-search-prev" class="term-search-btn" title="Previous">&uarr;</button>
+    <button id="term-search-next" class="term-search-btn" title="Next">&darr;</button>
+    <button id="term-search-close" class="term-search-btn" title="Close">&times;</button>
+  </div>
 
   <!-- Keyboard shortcuts modal -->
   <div id="shortcuts-overlay" class="hidden">
@@ -194,9 +256,10 @@
         <div class="shortcuts-section">
           <h3>Navigation</h3>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>K</kbd><span>Command palette</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>P</kbd><span>Quick open file</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Tab</kbd><span>Cycle tabs</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
-          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find in file</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find (and replace) in file</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>G</kbd><span>Go to line</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>B</kbd><span>Toggle sidebar</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Focus mode</span></div>
@@ -207,23 +270,34 @@
         <div class="shortcuts-section">
           <h3>Session</h3>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>C</kbd><span>Interrupt Claude</span></div>
-          <div class="shortcut-row"><kbd>Esc</kbd><span>Close modal / dialog</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>N</kbd><span>New session</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find in terminal / file</span></div>
+          <div class="shortcut-row"><kbd>Esc</kbd><span>Stop / close modal</span></div>
+          <div class="shortcut-row"><kbd>/</kbd> in prompt<span>Quick actions menu</span></div>
+          <div class="shortcut-row"><kbd>@</kbd> in prompt<span>File mention autocomplete</span></div>
+          <div class="shortcut-row"><kbd>&uarr;</kbd>/<kbd>&darr;</kbd> in prompt<span>Prompt history</span></div>
+          <div class="shortcut-row">Prompt bar<span>Paste images, drag files</span></div>
         </div>
         <div class="shortcuts-section">
           <h3>Tabs</h3>
           <div class="shortcut-row"><kbd>Right-click</kbd> tab<span>Close / Close Others / Copy Path</span></div>
           <div class="shortcut-row"><kbd>Drag</kbd> tab<span>Reorder tabs</span></div>
+          <div class="shortcut-row"><kbd>Right-click</kbd> session<span>Session context menu</span></div>
         </div>
         <div class="shortcuts-section">
           <h3>File Tree</h3>
           <div class="shortcut-row"><kbd>Click</kbd> folder<span>Expand / collapse</span></div>
           <div class="shortcut-row"><kbd>Click</kbd> file<span>Open in tab</span></div>
+          <div class="shortcut-row"><kbd>&uarr;</kbd>/<kbd>&darr;</kbd>/<kbd>j</kbd>/<kbd>k</kbd><span>Navigate file tree</span></div>
+          <div class="shortcut-row"><kbd>Enter</kbd><span>Open file / toggle folder</span></div>
+          <div class="shortcut-row"><kbd>Drag</kbd> file<span>Drop into prompt bar</span></div>
           <div class="shortcut-row">Filter input<span>Search files by name</span></div>
         </div>
         <div class="shortcuts-section">
           <h3>Git Panel</h3>
           <div class="shortcut-row"><kbd>Click</kbd> file row<span>View diff</span></div>
           <div class="shortcut-row"><kbd>Enter</kbd> in commit<span>Commit staged</span></div>
+          <div class="shortcut-row"><kbd>Preview</kbd> button<span>Preview staged diff</span></div>
         </div>
       </div>
     </div>

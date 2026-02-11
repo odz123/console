@@ -88,9 +88,43 @@
   const fvSearchClose = document.getElementById('fv-search-close');
   let fvSearchMatches = [];
   let fvSearchCurrentIdx = -1;
+
+  // Find and Replace refs
+  const fvReplaceRow = document.getElementById('fv-replace-row');
+  const fvReplaceInput = document.getElementById('fv-replace-input');
+  const fvReplaceOne = document.getElementById('fv-replace-one');
+  const fvReplaceAll = document.getElementById('fv-replace-all');
+  const fvToggleReplace = document.getElementById('fv-search-toggle-replace');
+
+  // Quick file open refs
+  const quickOpenOverlay = document.getElementById('quick-open-overlay');
+  const quickOpenInput = document.getElementById('quick-open-input');
+  const quickOpenResults = document.getElementById('quick-open-results');
+
+  // File preview tooltip ref
+  const filePreviewTooltip = document.getElementById('file-preview-tooltip');
+
+  // File tree header button refs
+  const btnExpandAll = document.getElementById('btn-expand-all');
+  const btnCollapseAll = document.getElementById('btn-collapse-all');
   const btnToggleFileTree = document.getElementById('btn-toggle-file-tree');
   const btnRefreshFileTree = document.getElementById('btn-refresh-file-tree');
   const fileTreeSection = document.getElementById('file-tree-section');
+
+  // Recent files tracking
+  let recentFiles = [];
+  const MAX_RECENT_FILES = 20;
+  try {
+    const saved = localStorage.getItem('claude-console-recent-files');
+    if (saved) recentFiles = JSON.parse(saved);
+  } catch {}
+
+  // Session color labels
+  let sessionColors = {};
+  try {
+    const saved = localStorage.getItem('claude-console-session-colors');
+    if (saved) sessionColors = JSON.parse(saved);
+  } catch {}
 
   // Git panel refs
   const gitPanel = document.getElementById('git-panel');
@@ -148,6 +182,59 @@
   const statusRestart = document.getElementById('status-restart');
   const statusCopyCli = document.getElementById('status-copy-cli');
 
+  // New feature refs
+  const statusNotify = document.getElementById('status-notify');
+  const statusTheme = document.getElementById('status-theme');
+  const statusExport = document.getElementById('status-export');
+  const promptBar = document.getElementById('prompt-bar');
+  const promptInput = document.getElementById('prompt-input');
+  const promptSend = document.getElementById('prompt-send');
+
+  // Stop button ref
+  const stopBtn = document.getElementById('stop-btn');
+
+  // Quick actions ref
+  const quickActionsMenu = document.getElementById('quick-actions');
+
+  // Terminal search refs
+  const termSearchBar = document.getElementById('term-search-bar');
+  const termSearchInput = document.getElementById('term-search-input');
+  const termSearchCount = document.getElementById('term-search-count');
+  const termSearchPrev = document.getElementById('term-search-prev');
+  const termSearchNext = document.getElementById('term-search-next');
+  const termSearchClose = document.getElementById('term-search-close');
+  let termSearchAddon = null;
+
+  // File autocomplete refs
+  const fileAutocomplete = document.getElementById('file-autocomplete');
+  const promptFileChips = document.getElementById('prompt-file-chips');
+
+  // Dirty tabs tracking (unsaved edits)
+  const dirtyTabs = new Set();
+
+  // Attached files state for prompt bar
+  let attachedFiles = [];
+
+  // Prompt history state
+  const promptHistory = [];
+  let promptHistoryIdx = -1;
+  let promptHistoryDraft = '';
+  const MAX_PROMPT_HISTORY = 50;
+
+  // Git diff preview ref
+  const gitDiffPreview = document.getElementById('git-diff-preview');
+  const btnGitPreview = document.getElementById('btn-git-preview');
+
+  // Scroll line count ref
+  const scrollLineCount = document.getElementById('scroll-line-count');
+
+  // Session pinning state
+  let pinnedSessions = new Set();
+  try {
+    const saved = localStorage.getItem('claude-console-pinned-sessions');
+    if (saved) pinnedSessions = new Set(JSON.parse(saved));
+  } catch {}
+
   // Notification dot state
   let gitChangesPending = false;
 
@@ -168,6 +255,23 @@
   // Git status cache for file tree change indicators
   let gitFileStatusMap = new Map(); // filePath -> status letter (M, A, D, ?, etc.)
 
+  // Browser notifications state
+  let notificationsEnabled = false;
+  let notificationPermission = typeof Notification !== 'undefined' ? Notification.permission : 'denied';
+
+  // Theme state
+  let currentTheme = 'dark';
+  try {
+    const saved = localStorage.getItem('claude-console-theme');
+    if (saved === 'light') currentTheme = 'light';
+  } catch {}
+  if (currentTheme === 'light') document.body.classList.add('light-theme');
+
+  // Check/restore notification preference
+  try {
+    notificationsEnabled = localStorage.getItem('claude-console-notifications') === 'true';
+  } catch {}
+
   // Terminal font size zoom
   const statusFontSize = document.getElementById('status-font-size');
   const statusChanges = document.getElementById('status-changes');
@@ -181,6 +285,134 @@
     if (ws && ws.readyState === WebSocket.OPEN) {
       ws.send(data);
     }
+  }
+
+  // --- Browser notifications ---
+  function requestNotificationPermission() {
+    if (typeof Notification === 'undefined') return;
+    if (Notification.permission === 'granted') {
+      notificationsEnabled = true;
+      try { localStorage.setItem('claude-console-notifications', 'true'); } catch {}
+      return;
+    }
+    if (Notification.permission !== 'denied') {
+      Notification.requestPermission().then(permission => {
+        notificationPermission = permission;
+        notificationsEnabled = permission === 'granted';
+        try { localStorage.setItem('claude-console-notifications', String(notificationsEnabled)); } catch {}
+      });
+    }
+  }
+
+  function sendBrowserNotification(title, body) {
+    if (!notificationsEnabled || typeof Notification === 'undefined') return;
+    if (Notification.permission !== 'granted') return;
+    if (document.hasFocus()) return; // Don't notify if tab is focused
+    try {
+      const n = new Notification(title, {
+        body,
+        icon: 'data:image/svg+xml,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 100"><text y="80" font-size="80">✦</text></svg>',
+        tag: 'claude-console-idle',
+      });
+      n.onclick = () => { window.focus(); n.close(); };
+      setTimeout(() => n.close(), 8000);
+    } catch {}
+  }
+
+  function toggleNotifications() {
+    if (!notificationsEnabled) {
+      requestNotificationPermission();
+    } else {
+      notificationsEnabled = false;
+      try { localStorage.setItem('claude-console-notifications', 'false'); } catch {}
+    }
+  }
+
+  // --- Theme toggle ---
+  function toggleTheme() {
+    currentTheme = currentTheme === 'dark' ? 'light' : 'dark';
+    document.body.classList.toggle('light-theme', currentTheme === 'light');
+    try { localStorage.setItem('claude-console-theme', currentTheme); } catch {}
+
+    // Update terminal themes
+    const lightTermTheme = {
+      background: '#f5f2ee',
+      foreground: '#3d3a36',
+      cursor: '#d97757',
+      cursorAccent: '#f5f2ee',
+      selectionBackground: '#d9d1c7',
+      black: '#3d3a36',
+      red: '#c94040',
+      green: '#5a8f4a',
+      yellow: '#a88f40',
+      blue: '#4a7fa0',
+      magenta: '#a05a7a',
+      cyan: '#5a9a8a',
+      white: '#f5f2ee',
+      brightBlack: '#8c8478',
+      brightRed: '#d95555',
+      brightGreen: '#6aa05a',
+      brightYellow: '#b89f50',
+      brightBlue: '#5a8fb0',
+      brightMagenta: '#b06a8a',
+      brightCyan: '#6aaa9a',
+      brightWhite: '#2b2a27',
+    };
+    const darkTermTheme = {
+      background: '#2b2a27',
+      foreground: '#e8dfd5',
+      cursor: '#d97757',
+      cursorAccent: '#2b2a27',
+      selectionBackground: '#4a4540',
+      black: '#2b2a27',
+      red: '#d95555',
+      green: '#7cba6a',
+      yellow: '#d4b87a',
+      blue: '#7aadca',
+      magenta: '#c97a9c',
+      cyan: '#88c8b8',
+      white: '#e8dfd5',
+      brightBlack: '#8c8478',
+      brightRed: '#e06666',
+      brightGreen: '#8ece7e',
+      brightYellow: '#e0c88e',
+      brightBlue: '#8ebdd0',
+      brightMagenta: '#d98eb0',
+      brightCyan: '#9ed0c4',
+      brightWhite: '#fff8f0',
+    };
+    const newTheme = currentTheme === 'light' ? lightTermTheme : darkTermTheme;
+    if (term) term.options.theme = newTheme;
+    if (shellTerm) shellTerm.options.theme = newTheme;
+  }
+
+  // --- Session output export ---
+  function exportSessionOutput() {
+    if (!term || !activeSessionId) return;
+    const session = sessions.find(s => s.id === activeSessionId);
+    const name = session ? session.name : 'session';
+
+    // Extract text from terminal buffer
+    const buf = term.buffer.active;
+    const lines = [];
+    for (let i = 0; i <= buf.length - 1; i++) {
+      const line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    // Trim trailing empty lines
+    while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
+
+    const text = lines.join('\n');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name.replace(/[^a-zA-Z0-9_-]/g, '_')}_output.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Session output exported', 'success', 2000);
   }
 
   function debounce(fn, ms) {
@@ -295,6 +527,11 @@
       progressBar.classList.toggle('hidden', dotClass !== 'working');
     }
 
+    // Show/hide stop button overlay
+    if (stopBtn) {
+      stopBtn.classList.toggle('hidden', dotClass !== 'working' || activeTabId !== 'claude');
+    }
+
     // Show/hide restart button based on session state
     if (!alive) {
       statusRestart.classList.remove('hidden');
@@ -310,6 +547,26 @@
     const termWrapper = document.getElementById('terminal-wrapper');
     if (termWrapper && termWrapper.style.display !== 'none') {
       termWrapper.style.inset = `${getTopInset()} 0 24px 0`;
+    }
+
+    // Update notify button state
+    if (statusNotify) {
+      statusNotify.classList.toggle('status-btn-active', notificationsEnabled);
+      statusNotify.title = notificationsEnabled ? 'Notifications on — click to disable' : 'Enable browser notifications';
+    }
+
+    // Update theme button label
+    if (statusTheme) {
+      statusTheme.textContent = currentTheme === 'dark' ? 'Light' : 'Dark';
+    }
+
+    // Show prompt bar when session is active and on Claude tab
+    if (promptBar) {
+      if (activeTabId === 'claude' && alive) {
+        promptBar.classList.remove('hidden');
+      } else {
+        promptBar.classList.add('hidden');
+      }
     }
 
     // Start duration timer if not running
@@ -413,7 +670,7 @@
   }
 
   // --- Confirmation dialog ---
-  function showConfirmDialog(title, message, onConfirm, onCancel) {
+  function showConfirmDialog(title, message, onConfirm, onCancel, confirmText) {
     const overlay = document.createElement('div');
     overlay.className = 'confirm-overlay';
 
@@ -445,7 +702,7 @@
 
     const confirmBtn = document.createElement('button');
     confirmBtn.className = 'confirm-ok';
-    confirmBtn.textContent = 'Delete Anyway';
+    confirmBtn.textContent = confirmText || 'Delete Anyway';
     confirmBtn.onclick = () => {
       cleanup();
       if (onConfirm) onConfirm();
@@ -821,6 +1078,14 @@
               // Show notification dot on Git tab
               setGitTabBadge(true);
             }
+            // Auto-refresh open file tabs
+            refreshOpenFileTabs();
+            // Browser notification
+            const idleSession = sessions.find(s => s.id === sessionId);
+            sendBrowserNotification(
+              'Claude finished',
+              idleSession ? `Session "${idleSession.name}" is now idle` : 'Session is now idle'
+            );
           }
           break;
         }
@@ -993,7 +1258,13 @@
       // Sessions list
       const projSessions = sessions
         .filter((s) => s.projectId === proj.id)
-        .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+        .sort((a, b) => {
+          // Pinned sessions first, then by creation date
+          const aPinned = pinnedSessions.has(a.id) ? 0 : 1;
+          const bPinned = pinnedSessions.has(b.id) ? 0 : 1;
+          if (aPinned !== bPinned) return aPinned - bPinned;
+          return new Date(a.createdAt) - new Date(b.createdAt);
+        });
 
       const ul = document.createElement('ul');
       ul.className = 'project-sessions';
@@ -1013,6 +1284,14 @@
         } else {
           dot.classList.add('exited');
           sessionIdleState.delete(s.id);
+        }
+
+        // Color label indicator
+        if (sessionColors[s.id]) {
+          const colorDot = document.createElement('span');
+          colorDot.className = 'session-color-dot';
+          colorDot.style.background = sessionColors[s.id];
+          li.appendChild(colorDot);
         }
 
         // Session info container (name + optional badges)
@@ -1061,6 +1340,28 @@
         const actions = document.createElement('div');
         actions.className = 'session-actions';
 
+        // Pin button
+        const sPin = document.createElement('button');
+        sPin.className = 'session-pin' + (pinnedSessions.has(s.id) ? ' pinned' : '');
+        sPin.textContent = pinnedSessions.has(s.id) ? '\u2605' : '\u2606'; // ★ or ☆
+        sPin.title = pinnedSessions.has(s.id) ? 'Unpin session' : 'Pin session';
+        sPin.onclick = (e) => {
+          e.stopPropagation();
+          togglePinSession(s.id);
+        };
+        actions.appendChild(sPin);
+
+        // Clone button
+        const sClone = document.createElement('button');
+        sClone.className = 'session-clone';
+        sClone.textContent = '\u2398'; // Clone icon
+        sClone.title = 'Clone session';
+        sClone.onclick = (e) => {
+          e.stopPropagation();
+          cloneSession(s.id);
+        };
+        actions.appendChild(sClone);
+
         // Archive button (only show if session has worktree)
         if (s.worktreePath) {
           const sArchive = document.createElement('button');
@@ -1095,6 +1396,8 @@
           }
           attachSession(s.id);
         };
+
+        li.oncontextmenu = (e) => showSessionContextMenu(e, s);
 
         ul.appendChild(li);
       }
@@ -1660,6 +1963,14 @@
       row.appendChild(icon);
       row.appendChild(label);
       row.onclick = () => openFileTab(filePath, file);
+      // Make file tree items draggable to prompt bar
+      row.draggable = true;
+      row.ondragstart = (e) => {
+        e.dataTransfer.setData('text/plain', filePath);
+        e.dataTransfer.effectAllowed = 'copy';
+      };
+      // File preview on hover
+      setupFilePreviewHover(row, filePath);
       container.appendChild(row);
     }
 
@@ -1775,6 +2086,15 @@
         label.className = 'tab-label';
         label.textContent = tab.filename;
         el.appendChild(label);
+
+        // Dirty indicator (unsaved edits)
+        if (dirtyTabs.has(tab.id)) {
+          const dirty = document.createElement('span');
+          dirty.className = 'tab-dirty';
+          dirty.textContent = '\u25CF'; // ●
+          dirty.title = 'Unsaved changes';
+          el.appendChild(dirty);
+        }
       }
 
       // Diff stats badge (only for unpinned)
@@ -1878,7 +2198,9 @@
   }
 
   function getBottomInset() {
-    return statusBar && !statusBar.classList.contains('hidden') ? '24px' : '0';
+    const statusH = statusBar && !statusBar.classList.contains('hidden') ? 24 : 0;
+    const promptH = promptBar && !promptBar.classList.contains('hidden') ? promptBar.offsetHeight : 0;
+    return (statusH + promptH) + 'px';
   }
 
   function switchTab(tabId) {
@@ -1892,8 +2214,23 @@
     if (tabId === 'claude') {
       // Show terminal, hide file viewer
       termWrapper.style.display = '';
-      termWrapper.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
       fileViewer.classList.add('hidden');
+      // Show prompt bar for Claude tab
+      if (promptBar) {
+        const session = sessions.find(s => s.id === activeSessionId);
+        if (session && session.alive !== false) {
+          promptBar.classList.remove('hidden');
+        } else {
+          promptBar.classList.add('hidden');
+        }
+      }
+      // Show stop button if Claude is working
+      if (stopBtn) {
+        const idle = sessionIdleState.get(activeSessionId);
+        const session = sessions.find(s => s.id === activeSessionId);
+        stopBtn.classList.toggle('hidden', !(session && session.alive !== false && idle === false));
+      }
+      termWrapper.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
       updateScrollToBottomBtn();
       term.focus();
       // Refit terminal synchronously so term.cols/rows are correct before
@@ -1901,9 +2238,12 @@
       // Reading clientWidth/clientHeight forces a reflow after the inset change.
       if (fitAddon) fitAddon.fit();
     } else {
-      // Show file viewer, hide terminal
+      // Show file viewer, hide terminal, hide prompt bar, hide stop button
       termWrapper.style.display = 'none';
       fileViewer.classList.remove('hidden');
+      if (promptBar) promptBar.classList.add('hidden');
+      if (stopBtn) stopBtn.classList.add('hidden');
+      closeTermSearch();
       fileViewer.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
       scrollToBottomBtn.classList.add('hidden');
 
@@ -1914,9 +2254,25 @@
     }
   }
 
-  function closeTab(tabId) {
+  function closeTab(tabId, force) {
     const tab = openTabs.find(t => t.id === tabId);
     if (tab && tab.pinned) return; // can't close pinned tabs
+    // Check for unsaved edits
+    if (!force && dirtyTabs.has(tabId)) {
+      showConfirmDialog(
+        'Unsaved Changes',
+        `"${tab ? tab.filename : 'File'}" has unsaved changes. Close anyway?`,
+        () => {
+          dirtyTabs.delete(tabId);
+          closeTab(tabId, true);
+        },
+        null,
+        'Close Anyway'
+      );
+      return;
+    }
+    dirtyTabs.delete(tabId);
+    stopWatchingFile(tabId);
     openTabs = openTabs.filter(t => t.id !== tabId);
     if (activeTabId === tabId) {
       activeTabId = openTabs.length > 0 ? openTabs[openTabs.length - 1].id : 'claude';
@@ -2035,7 +2391,12 @@
     const contentType = res.headers.get('content-type') || '';
     let tab;
 
-    if (contentType.includes('application/json')) {
+    if (contentType.startsWith('image/')) {
+      // Image file — create blob URL for preview
+      const blob = await res.blob();
+      const blobUrl = URL.createObjectURL(blob);
+      tab = { id: filePath, filename, fullPath: filePath, content: blobUrl, type: 'image', mimeType: contentType };
+    } else if (contentType.includes('application/json')) {
       // JSON response — either a binary file indicator or unexpected payload
       const data = await res.json();
       if (data.isBinary) {
@@ -2054,6 +2415,32 @@
     if (tab) {
       openTabs.push(tab);
       switchTab(tab.id);
+      // Track in recent files
+      trackRecentFile(tab.fullPath);
+      // Start watching for external changes
+      if (tab.type === 'text' || tab.type === 'markdown') {
+        startWatchingFile(tab.id, tab.fullPath);
+      }
+    }
+  }
+
+  // --- Auto-refresh open file tabs ---
+  async function refreshOpenFileTabs() {
+    if (!activeSessionId || openTabs.length === 0) return;
+    for (const tab of openTabs) {
+      if (tab.type === 'binary' || tab.type === 'diff') continue;
+      try {
+        const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(tab.fullPath)}`);
+        if (!res.ok) continue;
+        const contentType = res.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) continue; // binary
+        const newContent = await res.text();
+        if (newContent !== tab.content) {
+          tab.content = newContent;
+          // Re-render if this tab is currently visible
+          if (activeTabId === tab.id) renderFileContent(tab);
+        }
+      } catch { /* silently skip */ }
     }
   }
 
@@ -2192,6 +2579,25 @@
     fileViewerContent.innerHTML = '';
     fileViewerContent.className = '';
 
+    if (tab.type === 'image') {
+      fileViewerContent.className = 'image-preview';
+      const img = document.createElement('img');
+      img.src = tab.content;
+      img.alt = tab.filename;
+      img.className = 'image-preview-img';
+      img.draggable = false;
+      fileViewerContent.appendChild(img);
+
+      // Image info bar
+      img.onload = () => {
+        const info = document.createElement('div');
+        info.className = 'image-info';
+        info.textContent = `${img.naturalWidth} \u00D7 ${img.naturalHeight}`;
+        fileViewerContent.appendChild(info);
+      };
+      return;
+    }
+
     if (tab.type === 'binary') {
       fileViewerContent.className = 'binary-file';
       fileViewerContent.textContent = 'Binary file \u2014 not supported';
@@ -2321,6 +2727,14 @@
     textarea.className = 'fv-editor';
     textarea.value = tab.content;
     textarea.spellcheck = false;
+    textarea.oninput = () => {
+      if (tab.content !== textarea.value) {
+        dirtyTabs.add(tab.id);
+      } else {
+        dirtyTabs.delete(tab.id);
+      }
+      renderTabs(); // update dirty indicator on tab
+    };
     fileViewerContent.appendChild(textarea);
     textarea.focus();
   }
@@ -2370,6 +2784,7 @@
 
       // Update tab content and exit edit mode
       tab.content = newContent;
+      dirtyTabs.delete(tab.id);
       showToast('File saved', 'success', 2000);
       exitEditMode(true);
     } catch {
@@ -2494,6 +2909,67 @@
   fvSearchNext.onclick = () => navigateFvSearch(1);
   fvSearchPrev.onclick = () => navigateFvSearch(-1);
   fvSearchClose.onclick = closeFvSearch;
+
+  // Toggle replace row
+  if (fvToggleReplace) {
+    fvToggleReplace.onclick = () => {
+      if (!fvReplaceRow) return;
+      const visible = !fvReplaceRow.classList.contains('hidden');
+      fvReplaceRow.classList.toggle('hidden', visible);
+      fvToggleReplace.classList.toggle('fv-toggle-replace-open', !visible);
+      if (!visible) fvReplaceInput.focus();
+    };
+  }
+
+  // Replace current match
+  if (fvReplaceOne) {
+    fvReplaceOne.onclick = () => {
+      const tab = openTabs.find(t => t.id === activeTabId);
+      if (!tab || !tab.content || fvSearchMatches.length === 0) return;
+      const searchText = fvSearchInput.value.trim();
+      const replaceText = fvReplaceInput.value;
+      if (!searchText) return;
+      // Replace one occurrence in content
+      const idx = findNthOccurrence(tab.content, searchText, fvSearchCurrentIdx);
+      if (idx >= 0) {
+        tab.content = tab.content.substring(0, idx) + replaceText + tab.content.substring(idx + searchText.length);
+        dirtyTabs.add(tab.id);
+        renderFileContent(tab);
+        renderTabs();
+        // Re-search to update highlights
+        performFvSearch(searchText);
+      }
+    };
+  }
+
+  // Replace all matches
+  if (fvReplaceAll) {
+    fvReplaceAll.onclick = () => {
+      const tab = openTabs.find(t => t.id === activeTabId);
+      if (!tab || !tab.content || fvSearchMatches.length === 0) return;
+      const searchText = fvSearchInput.value.trim();
+      const replaceText = fvReplaceInput.value;
+      if (!searchText) return;
+      const count = fvSearchMatches.length;
+      tab.content = tab.content.split(searchText).join(replaceText);
+      dirtyTabs.add(tab.id);
+      renderFileContent(tab);
+      renderTabs();
+      performFvSearch(searchText);
+      showToast(`Replaced ${count} occurrence${count !== 1 ? 's' : ''}`, 'success', 2000);
+    };
+  }
+
+  function findNthOccurrence(content, search, n) {
+    const lower = content.toLowerCase();
+    const q = search.toLowerCase();
+    let idx = -1;
+    for (let i = 0; i <= n; i++) {
+      idx = lower.indexOf(q, idx + 1);
+      if (idx < 0) return -1;
+    }
+    return idx;
+  }
 
   // --- Go to line ---
   function openGoToLine() {
@@ -3248,6 +3724,131 @@
     term.focus();
   };
 
+  // --- New feature button handlers ---
+
+  if (statusNotify) {
+    statusNotify.onclick = toggleNotifications;
+  }
+
+  if (statusTheme) {
+    statusTheme.onclick = toggleTheme;
+  }
+
+  if (statusExport) {
+    statusExport.onclick = exportSessionOutput;
+  }
+
+  // --- Prompt input bar ---
+
+  function showPromptBar() {
+    if (!activeSessionId) return;
+    promptBar.classList.remove('hidden');
+    // Adjust terminal wrapper bottom inset
+    const termWrapper = document.getElementById('terminal-wrapper');
+    if (termWrapper && termWrapper.style.display !== 'none') {
+      termWrapper.style.inset = `${getTopInset()} 0 ${getPromptBottomInset()} 0`;
+      if (fitAddon) fitAddon.fit();
+    }
+  }
+
+  function hidePromptBar() {
+    promptBar.classList.add('hidden');
+  }
+
+  function getPromptBottomInset() {
+    const statusH = statusBar && !statusBar.classList.contains('hidden') ? 24 : 0;
+    const promptH = promptBar && !promptBar.classList.contains('hidden') ? promptBar.offsetHeight : 0;
+    return (statusH + promptH) + 'px';
+  }
+
+  function sendPromptInput() {
+    if (!activeSessionId) return;
+    let text = promptInput.value;
+    // Prepend attached file references
+    if (attachedFiles.length > 0) {
+      const refs = attachedFiles.map(f => '@' + f).join(' ');
+      text = refs + ' ' + text;
+    }
+    if (!text.trim()) return;
+    // Save to prompt history
+    const raw = promptInput.value.trim();
+    if (raw && (promptHistory.length === 0 || promptHistory[promptHistory.length - 1] !== raw)) {
+      promptHistory.push(raw);
+      if (promptHistory.length > MAX_PROMPT_HISTORY) promptHistory.shift();
+    }
+    promptHistoryIdx = -1;
+    promptHistoryDraft = '';
+    // Send text to terminal followed by Enter
+    wsSend(JSON.stringify({ type: 'input', data: text + '\r' }));
+    promptInput.value = '';
+    promptInput.style.height = 'auto';
+    attachedFiles = [];
+    renderFileChips();
+    term.focus();
+  }
+
+  if (promptSend) {
+    promptSend.onclick = sendPromptInput;
+  }
+
+  if (promptInput) {
+    // Auto-grow textarea
+    promptInput.oninput = () => {
+      promptInput.style.height = 'auto';
+      promptInput.style.height = Math.min(promptInput.scrollHeight, 120) + 'px';
+      // Re-adjust terminal inset
+      const termWrapper = document.getElementById('terminal-wrapper');
+      if (termWrapper && termWrapper.style.display !== 'none') {
+        termWrapper.style.inset = `${getTopInset()} 0 ${getPromptBottomInset()} 0`;
+        if (fitAddon) fitAddon.fit();
+      }
+    };
+
+    promptInput.onkeydown = (e) => {
+      // Enter sends, Shift+Enter for newline
+      if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+        sendPromptInput();
+      }
+      // Up/Down arrow — prompt history navigation (only when cursor is at line boundary)
+      if (e.key === 'ArrowUp' && promptHistory.length > 0) {
+        const beforeCursor = promptInput.value.substring(0, promptInput.selectionStart);
+        if (!beforeCursor.includes('\n')) { // only at first line
+          e.preventDefault();
+          if (promptHistoryIdx === -1) {
+            promptHistoryDraft = promptInput.value;
+            promptHistoryIdx = promptHistory.length - 1;
+          } else if (promptHistoryIdx > 0) {
+            promptHistoryIdx--;
+          }
+          promptInput.value = promptHistory[promptHistoryIdx];
+          promptInput.selectionStart = promptInput.selectionEnd = promptInput.value.length;
+          return;
+        }
+      }
+      if (e.key === 'ArrowDown' && promptHistoryIdx >= 0) {
+        const afterCursor = promptInput.value.substring(promptInput.selectionEnd);
+        if (!afterCursor.includes('\n')) { // only at last line
+          e.preventDefault();
+          if (promptHistoryIdx < promptHistory.length - 1) {
+            promptHistoryIdx++;
+            promptInput.value = promptHistory[promptHistoryIdx];
+          } else {
+            promptHistoryIdx = -1;
+            promptInput.value = promptHistoryDraft;
+          }
+          promptInput.selectionStart = promptInput.selectionEnd = promptInput.value.length;
+          return;
+        }
+      }
+      // Escape focuses terminal
+      if (e.key === 'Escape') {
+        promptInput.blur();
+        term.focus();
+      }
+    };
+  }
+
   // --- File tree filter ---
 
   fileTreeFilter.oninput = debounce(() => {
@@ -3401,6 +4002,17 @@
       return;
     }
 
+    // Ctrl+P — quick file open
+    if (e.key === 'p' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+      e.preventDefault();
+      if (quickOpenOverlay && quickOpenOverlay.classList.contains('hidden')) {
+        openQuickOpen();
+      } else {
+        closeQuickOpen();
+      }
+      return;
+    }
+
     // Ctrl+K — command palette (works from anywhere)
     if (e.key === 'k' && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
@@ -3412,8 +4024,51 @@
       return;
     }
 
-    // Esc — close overlays
+    // Ctrl+N — new session (if a project is expanded)
+    if (e.key === 'n' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+      e.preventDefault();
+      // Find first expanded project and show new session input
+      if (activeSessionId) {
+        const session = sessions.find(s => s.id === activeSessionId);
+        if (session) {
+          const projGroup = projectListEl.querySelector(`[data-project-id="${session.projectId}"]`);
+          if (projGroup) {
+            expandedProjects.add(session.projectId);
+            renderSidebar();
+            const ul = projGroup.querySelector('.project-sessions');
+            if (ul) showInlineSessionInput(ul, session.projectId);
+          }
+        }
+      } else if (projects.length > 0) {
+        const proj = projects[0];
+        expandedProjects.add(proj.id);
+        renderSidebar();
+        const projGroup = projectListEl.querySelector(`[data-project-id="${proj.id}"]`);
+        if (projGroup) {
+          const ul = projGroup.querySelector('.project-sessions');
+          if (ul) showInlineSessionInput(ul, proj.id);
+        }
+      }
+      return;
+    }
+
+    // Ctrl+F — find in terminal (when on Claude tab) or file
+    if (e.key === 'f' && (e.ctrlKey || e.metaKey)) {
+      if (activeSessionId && activeTabId === 'claude') {
+        e.preventDefault();
+        openTermSearch();
+        return;
+      }
+      // For file tabs, the existing fv-search handler in the earlier keydown listener catches it
+    }
+
+    // Esc — close overlays, stop Claude, or close terminal search
     if (e.key === 'Escape') {
+      if (quickOpenOverlay && !quickOpenOverlay.classList.contains('hidden')) {
+        closeQuickOpen();
+        e.stopPropagation();
+        return;
+      }
       if (!cpOverlay.classList.contains('hidden')) {
         closeCommandPalette();
         e.stopPropagation();
@@ -3423,6 +4078,21 @@
         closeShortcuts();
         e.stopPropagation();
         return;
+      }
+      if (termSearchBar && !termSearchBar.classList.contains('hidden')) {
+        closeTermSearch();
+        term.focus();
+        e.stopPropagation();
+        return;
+      }
+      // Esc while Claude is working sends interrupt
+      if (activeSessionId && activeTabId === 'claude') {
+        const idle = sessionIdleState.get(activeSessionId);
+        const session = sessions.find(s => s.id === activeSessionId);
+        if (session && session.alive !== false && idle === false) {
+          wsSend(JSON.stringify({ type: 'input', sessionId: activeSessionId, data: '\x03' }));
+          return;
+        }
       }
     }
 
@@ -3473,6 +4143,19 @@
         { icon: '\u25A3', label: 'Toggle Sidebar', meta: 'Ctrl+B', action: () => { closeCommandPalette(); toggleMiniSidebar(); } },
         { icon: '\u25A3', label: 'Toggle Focus Mode', meta: 'Ctrl+\\', action: () => { closeCommandPalette(); toggleFocusMode(); } },
         { icon: '\u2717', label: 'Close All Tabs', meta: 'action', action: () => { closeCommandPalette(); closeAllTabs(); } },
+        { icon: '\u25CB', label: 'Toggle Theme', meta: 'light/dark', action: () => { closeCommandPalette(); toggleTheme(); } },
+        { icon: '\u21E9', label: 'Export Session Output', meta: 'download .txt', action: () => { closeCommandPalette(); exportSessionOutput(); } },
+        { icon: '\u266A', label: 'Toggle Notifications', meta: notificationsEnabled ? 'on' : 'off', action: () => { closeCommandPalette(); toggleNotifications(); } },
+        { icon: '\u2398', label: 'Find in Terminal', meta: 'Ctrl+F', action: () => { closeCommandPalette(); openTermSearch(); } },
+        { icon: '\u2398', label: 'Clone Session', meta: 'duplicate', action: () => { closeCommandPalette(); cloneSession(activeSessionId); } },
+        { icon: '\u2630', label: 'Focus File Tree', meta: 'keyboard nav', action: () => {
+          closeCommandPalette();
+          const treeSection = document.getElementById('file-tree-section');
+          if (treeSection) treeSection.focus();
+        }},
+        { icon: '\u2610', label: 'Quick Open File', meta: 'Ctrl+P', action: () => { closeCommandPalette(); openQuickOpen(); } },
+        { icon: '\u25BD', label: 'Expand All Folders', meta: 'file tree', action: () => { closeCommandPalette(); if (btnExpandAll) btnExpandAll.click(); } },
+        { icon: '\u25B7', label: 'Collapse All Folders', meta: 'file tree', action: () => { closeCommandPalette(); if (btnCollapseAll) btnCollapseAll.click(); } },
       );
     }
 
@@ -3678,6 +4361,16 @@
       scrollToBottomBtn.classList.add('hidden');
     } else {
       scrollToBottomBtn.classList.remove('hidden');
+      // Show lines-from-bottom count
+      if (scrollLineCount) {
+        const buf = term.buffer.active;
+        const linesAway = buf.baseY - buf.viewportY;
+        if (linesAway > 0) {
+          scrollLineCount.textContent = linesAway + (linesAway === 1 ? ' line' : ' lines');
+        } else {
+          scrollLineCount.textContent = '';
+        }
+      }
     }
   }
 
@@ -4015,9 +4708,1105 @@
     }
   }
 
+  // --- Stop button ---
+  if (stopBtn) {
+    stopBtn.onclick = () => {
+      if (!activeSessionId) return;
+      wsSend(JSON.stringify({ type: 'input', sessionId: activeSessionId, data: '\x03' }));
+      term.focus();
+    };
+  }
+
+  // --- Quick actions menu ---
+  let quickActionsVisible = false;
+
+  function showQuickActions() {
+    if (!quickActionsMenu || !promptBar) return;
+    // Position above prompt bar
+    const promptRect = promptBar.getBoundingClientRect();
+    quickActionsMenu.style.bottom = (window.innerHeight - promptRect.top + 4) + 'px';
+    quickActionsMenu.style.left = promptRect.left + 'px';
+    quickActionsMenu.classList.remove('hidden');
+    quickActionsVisible = true;
+  }
+
+  function hideQuickActions() {
+    if (!quickActionsMenu) return;
+    quickActionsMenu.classList.add('hidden');
+    quickActionsVisible = false;
+  }
+
+  if (quickActionsMenu) {
+    quickActionsMenu.querySelectorAll('.qa-item').forEach(item => {
+      item.onclick = () => {
+        const action = item.dataset.action;
+        if (action && activeSessionId) {
+          wsSend(JSON.stringify({ type: 'input', data: action + '\r' }));
+          hideQuickActions();
+          promptInput.value = '';
+          term.focus();
+        }
+      };
+    });
+  }
+
+  // Show quick actions when typing "/" at beginning of prompt
+  if (promptInput) {
+    const origOninput = promptInput.oninput;
+    promptInput.oninput = () => {
+      if (origOninput) origOninput();
+      const text = promptInput.value;
+      if (text === '/') {
+        showQuickActions();
+      } else if (quickActionsVisible && !text.startsWith('/')) {
+        hideQuickActions();
+      }
+    };
+
+    const origOnkeydown = promptInput.onkeydown;
+    promptInput.onkeydown = (e) => {
+      if (quickActionsVisible && e.key === 'Escape') {
+        e.preventDefault();
+        hideQuickActions();
+        return;
+      }
+      if (origOnkeydown) origOnkeydown(e);
+    };
+  }
+
+  // Close quick actions on outside click
+  document.addEventListener('mousedown', (e) => {
+    if (quickActionsVisible && quickActionsMenu && !quickActionsMenu.contains(e.target) &&
+        promptInput !== e.target) {
+      hideQuickActions();
+    }
+  });
+
+  // --- Terminal search ---
+  let termSearchResults = [];
+  let termSearchIdx = -1;
+
+  function openTermSearch() {
+    if (!termSearchBar || !activeSessionId || activeTabId !== 'claude') return;
+    termSearchBar.classList.remove('hidden');
+    termSearchInput.value = '';
+    termSearchCount.textContent = '';
+    termSearchResults = [];
+    termSearchIdx = -1;
+    termSearchInput.focus();
+  }
+
+  function closeTermSearch() {
+    if (!termSearchBar) return;
+    termSearchBar.classList.add('hidden');
+    termSearchResults = [];
+    termSearchIdx = -1;
+    // Clear search decoration
+    clearTermSearchHighlights();
+  }
+
+  function clearTermSearchHighlights() {
+    // Clear any previous search highlights by marking none
+    if (term && term._decorations) {
+      for (const d of term._decorations) d.dispose();
+      term._decorations = [];
+    }
+  }
+
+  function searchTermBuffer(query) {
+    if (!term || !query) {
+      termSearchCount.textContent = '';
+      termSearchResults = [];
+      termSearchIdx = -1;
+      return;
+    }
+
+    const q = query.toLowerCase();
+    const buf = term.buffer.active;
+    const results = [];
+
+    for (let i = 0; i < buf.length; i++) {
+      const line = buf.getLine(i);
+      if (!line) continue;
+      const text = line.translateToString(true).toLowerCase();
+      let startIdx = 0;
+      while (true) {
+        const pos = text.indexOf(q, startIdx);
+        if (pos === -1) break;
+        results.push({ line: i, col: pos, length: query.length });
+        startIdx = pos + 1;
+      }
+    }
+
+    termSearchResults = results;
+    if (results.length > 0) {
+      termSearchIdx = results.length - 1; // Start from last match
+      termSearchCount.textContent = `${termSearchIdx + 1} of ${results.length}`;
+      scrollToTermSearchResult();
+    } else {
+      termSearchIdx = -1;
+      termSearchCount.textContent = 'No results';
+    }
+  }
+
+  function scrollToTermSearchResult() {
+    if (termSearchIdx < 0 || termSearchIdx >= termSearchResults.length) return;
+    const match = termSearchResults[termSearchIdx];
+    term.scrollToLine(match.line);
+    termSearchCount.textContent = `${termSearchIdx + 1} of ${termSearchResults.length}`;
+  }
+
+  function termSearchNext_() {
+    if (termSearchResults.length === 0) return;
+    termSearchIdx = (termSearchIdx + 1) % termSearchResults.length;
+    scrollToTermSearchResult();
+  }
+
+  function termSearchPrev_() {
+    if (termSearchResults.length === 0) return;
+    termSearchIdx = (termSearchIdx - 1 + termSearchResults.length) % termSearchResults.length;
+    scrollToTermSearchResult();
+  }
+
+  if (termSearchInput) {
+    termSearchInput.oninput = debounce(() => searchTermBuffer(termSearchInput.value), 200);
+    termSearchInput.onkeydown = (e) => {
+      if (e.key === 'Enter' && e.shiftKey) {
+        e.preventDefault();
+        termSearchPrev_();
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        termSearchNext_();
+      } else if (e.key === 'Escape') {
+        e.preventDefault();
+        closeTermSearch();
+        term.focus();
+      }
+    };
+  }
+  if (termSearchNext) termSearchNext.onclick = termSearchNext_;
+  if (termSearchPrev) termSearchPrev.onclick = termSearchPrev_;
+  if (termSearchClose) termSearchClose.onclick = () => { closeTermSearch(); term.focus(); };
+
+  // --- Session cloning ---
+  async function cloneSession(sessionId) {
+    const session = sessions.find(s => s.id === sessionId);
+    if (!session) return;
+    const cloneName = session.name + ' (copy)';
+    await createSession(session.projectId, cloneName, session.provider, session.providerOptions);
+  }
+
+  // --- @file autocomplete in prompt ---
+  let fileAutoItems = [];
+  let fileAutoIdx = -1;
+  let fileAutoQuery = '';
+
+  function collectAllFilePaths() {
+    const paths = [];
+    // Collect from open tabs
+    for (const t of openTabs) {
+      if (t.type !== 'diff') paths.push(t.fullPath);
+    }
+    // Collect from file tree
+    const labels = fileTreeEl.querySelectorAll('.file-tree-item:not(.file-tree-folder) .file-tree-label');
+    labels.forEach(label => {
+      const p = label.title || label.textContent;
+      if (p && !paths.includes(p)) paths.push(p);
+    });
+    return paths;
+  }
+
+  function showFileAutocomplete(query) {
+    if (!fileAutocomplete) return;
+    const all = collectAllFilePaths();
+    const q = query.toLowerCase();
+    fileAutoItems = all.filter(p => {
+      const name = p.split('/').pop().toLowerCase();
+      const full = p.toLowerCase();
+      return name.includes(q) || full.includes(q);
+    }).slice(0, 8);
+
+    if (fileAutoItems.length === 0) {
+      hideFileAutocomplete();
+      return;
+    }
+
+    fileAutoIdx = 0;
+    fileAutocomplete.innerHTML = '';
+    for (let i = 0; i < fileAutoItems.length; i++) {
+      const item = document.createElement('div');
+      item.className = 'file-auto-item' + (i === 0 ? ' active' : '');
+      const fname = fileAutoItems[i].split('/').pop();
+      const path = fileAutoItems[i];
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'file-auto-name';
+      nameSpan.textContent = fname;
+      const pathSpan = document.createElement('span');
+      pathSpan.className = 'file-auto-path';
+      pathSpan.textContent = path;
+      item.appendChild(nameSpan);
+      item.appendChild(pathSpan);
+      item.onmousedown = (e) => {
+        e.preventDefault();
+        selectFileAutoItem(i);
+      };
+      fileAutocomplete.appendChild(item);
+    }
+    fileAutocomplete.classList.remove('hidden');
+  }
+
+  function hideFileAutocomplete() {
+    if (!fileAutocomplete) return;
+    fileAutocomplete.classList.add('hidden');
+    fileAutoItems = [];
+    fileAutoIdx = -1;
+    fileAutoQuery = '';
+  }
+
+  function selectFileAutoItem(idx) {
+    if (idx < 0 || idx >= fileAutoItems.length) return;
+    const filePath = fileAutoItems[idx];
+    addAttachedFile(filePath);
+
+    // Replace the @query text in the prompt
+    const text = promptInput.value;
+    const atPos = text.lastIndexOf('@');
+    if (atPos >= 0) {
+      promptInput.value = text.substring(0, atPos) + text.substring(atPos + 1 + fileAutoQuery.length);
+    }
+    hideFileAutocomplete();
+    promptInput.focus();
+  }
+
+  function addAttachedFile(filePath) {
+    if (attachedFiles.includes(filePath)) return;
+    attachedFiles.push(filePath);
+    renderFileChips();
+  }
+
+  function removeAttachedFile(filePath) {
+    attachedFiles = attachedFiles.filter(f => f !== filePath);
+    renderFileChips();
+  }
+
+  function renderFileChips() {
+    if (!promptFileChips) return;
+    promptFileChips.innerHTML = '';
+    if (attachedFiles.length === 0) {
+      promptFileChips.classList.add('hidden');
+      return;
+    }
+    promptFileChips.classList.remove('hidden');
+    for (const f of attachedFiles) {
+      const chip = document.createElement('span');
+      chip.className = 'file-chip';
+      const fname = f.split('/').pop();
+      chip.textContent = fname;
+      chip.title = f;
+      const x = document.createElement('button');
+      x.className = 'file-chip-remove';
+      x.textContent = '\u00D7';
+      x.onclick = () => removeAttachedFile(f);
+      chip.appendChild(x);
+      promptFileChips.appendChild(chip);
+    }
+  }
+
+  // Hook into prompt input for @ detection
+  if (promptInput) {
+    const prevOninput = promptInput.oninput;
+    promptInput.oninput = () => {
+      if (prevOninput) prevOninput();
+      const text = promptInput.value;
+      const cursorPos = promptInput.selectionStart;
+      const beforeCursor = text.substring(0, cursorPos);
+      const atMatch = beforeCursor.match(/@(\S*)$/);
+      if (atMatch) {
+        fileAutoQuery = atMatch[1];
+        showFileAutocomplete(fileAutoQuery);
+      } else {
+        hideFileAutocomplete();
+      }
+    };
+
+    const prevOnkeydown = promptInput.onkeydown;
+    promptInput.onkeydown = (e) => {
+      // File autocomplete navigation
+      if (fileAutocomplete && !fileAutocomplete.classList.contains('hidden')) {
+        if (e.key === 'ArrowDown') {
+          e.preventDefault();
+          fileAutoIdx = (fileAutoIdx + 1) % fileAutoItems.length;
+          updateFileAutoSelection();
+          return;
+        }
+        if (e.key === 'ArrowUp') {
+          e.preventDefault();
+          fileAutoIdx = (fileAutoIdx - 1 + fileAutoItems.length) % fileAutoItems.length;
+          updateFileAutoSelection();
+          return;
+        }
+        if (e.key === 'Tab' || e.key === 'Enter') {
+          if (fileAutoItems.length > 0) {
+            e.preventDefault();
+            selectFileAutoItem(fileAutoIdx);
+            return;
+          }
+        }
+        if (e.key === 'Escape') {
+          e.preventDefault();
+          hideFileAutocomplete();
+          return;
+        }
+      }
+      if (prevOnkeydown) prevOnkeydown(e);
+    };
+  }
+
+  function updateFileAutoSelection() {
+    if (!fileAutocomplete) return;
+    const items = fileAutocomplete.querySelectorAll('.file-auto-item');
+    items.forEach((el, i) => el.classList.toggle('active', i === fileAutoIdx));
+  }
+
+  // --- Drag and drop files into prompt ---
+  if (promptBar) {
+    promptBar.addEventListener('dragover', (e) => {
+      e.preventDefault();
+      promptBar.classList.add('prompt-dragover');
+    });
+    promptBar.addEventListener('dragleave', () => {
+      promptBar.classList.remove('prompt-dragover');
+    });
+    promptBar.addEventListener('drop', (e) => {
+      e.preventDefault();
+      promptBar.classList.remove('prompt-dragover');
+      const filePath = e.dataTransfer.getData('text/plain');
+      if (filePath) {
+        addAttachedFile(filePath);
+        promptInput.focus();
+      }
+    });
+  }
+
+  // --- Session pinning ---
+  function togglePinSession(sessionId) {
+    if (pinnedSessions.has(sessionId)) {
+      pinnedSessions.delete(sessionId);
+    } else {
+      pinnedSessions.add(sessionId);
+    }
+    try { localStorage.setItem('claude-console-pinned-sessions', JSON.stringify([...pinnedSessions])); } catch {}
+    renderSidebar();
+  }
+
+  // --- Git diff preview ---
+  let gitDiffPreviewVisible = false;
+
+  if (btnGitPreview) {
+    btnGitPreview.onclick = async () => {
+      if (gitDiffPreviewVisible) {
+        gitDiffPreview.classList.add('hidden');
+        gitDiffPreviewVisible = false;
+        btnGitPreview.textContent = 'Preview';
+        return;
+      }
+      if (!activeSessionId) return;
+      btnGitPreview.textContent = 'Loading...';
+      try {
+        const res = await fetch(`/api/sessions/${activeSessionId}/git/diff?staged=true`);
+        if (!res.ok) {
+          showToast('Failed to load diff preview', 'error');
+          btnGitPreview.textContent = 'Preview';
+          return;
+        }
+        const data = await res.json();
+        gitDiffPreview.innerHTML = '';
+        if (!data.diff || data.diff.trim() === '') {
+          gitDiffPreview.textContent = 'No staged changes to preview.';
+        } else {
+          const pre = document.createElement('pre');
+          pre.className = 'git-diff-preview-content';
+          const lines = data.diff.split('\n');
+          for (const line of lines) {
+            const span = document.createElement('span');
+            if (line.startsWith('+') && !line.startsWith('+++')) {
+              span.className = 'diff-add';
+            } else if (line.startsWith('-') && !line.startsWith('---')) {
+              span.className = 'diff-del';
+            } else if (line.startsWith('@@')) {
+              span.className = 'diff-hunk';
+            } else if (line.startsWith('diff ') || line.startsWith('index ')) {
+              span.className = 'diff-header';
+            }
+            span.textContent = line;
+            pre.appendChild(span);
+            pre.appendChild(document.createTextNode('\n'));
+          }
+          gitDiffPreview.appendChild(pre);
+        }
+        gitDiffPreview.classList.remove('hidden');
+        gitDiffPreviewVisible = true;
+        btnGitPreview.textContent = 'Hide';
+      } catch {
+        showToast('Failed to load diff preview', 'error');
+        btnGitPreview.textContent = 'Preview';
+      }
+    };
+  }
+
+  // --- Image paste into prompt ---
+  const promptImagePreviews = document.getElementById('prompt-image-previews');
+  let pastedImages = []; // {name, dataUrl, blob}
+
+  if (promptInput) {
+    promptInput.addEventListener('paste', (e) => {
+      const items = e.clipboardData && e.clipboardData.items;
+      if (!items) return;
+      for (const item of items) {
+        if (item.type.startsWith('image/')) {
+          e.preventDefault();
+          const blob = item.getAsFile();
+          if (!blob) continue;
+          const reader = new FileReader();
+          reader.onload = () => {
+            const dataUrl = reader.result;
+            const name = `pasted-image-${pastedImages.length + 1}.png`;
+            pastedImages.push({ name, dataUrl, blob });
+            renderImagePreviews();
+          };
+          reader.readAsDataURL(blob);
+          break; // only handle first image
+        }
+      }
+    });
+  }
+
+  function renderImagePreviews() {
+    if (!promptImagePreviews) return;
+    promptImagePreviews.innerHTML = '';
+    if (pastedImages.length === 0) {
+      promptImagePreviews.classList.add('hidden');
+      return;
+    }
+    promptImagePreviews.classList.remove('hidden');
+    for (let i = 0; i < pastedImages.length; i++) {
+      const img = pastedImages[i];
+      const container = document.createElement('div');
+      container.className = 'prompt-image-preview';
+      const thumb = document.createElement('img');
+      thumb.src = img.dataUrl;
+      thumb.alt = img.name;
+      thumb.title = img.name;
+      const removeBtn = document.createElement('button');
+      removeBtn.className = 'prompt-image-remove';
+      removeBtn.textContent = '\u00D7';
+      removeBtn.onclick = () => {
+        pastedImages.splice(i, 1);
+        renderImagePreviews();
+      };
+      container.appendChild(thumb);
+      container.appendChild(removeBtn);
+      promptImagePreviews.appendChild(container);
+    }
+  }
+
+  // --- Keyboard file tree navigation ---
+  let fileTreeFocusedItem = null;
+
+  function initFileTreeKeyboard() {
+    const treeSection = document.getElementById('file-tree-section');
+    if (!treeSection) return;
+
+    // Make file tree section focusable
+    treeSection.setAttribute('tabindex', '-1');
+
+    treeSection.addEventListener('keydown', (e) => {
+      const allItems = [...fileTreeEl.querySelectorAll('.file-tree-item:not(.filter-hidden)')];
+      if (allItems.length === 0) return;
+
+      let currentIdx = fileTreeFocusedItem ? allItems.indexOf(fileTreeFocusedItem) : -1;
+
+      if (e.key === 'ArrowDown' || e.key === 'j') {
+        e.preventDefault();
+        currentIdx = Math.min(currentIdx + 1, allItems.length - 1);
+        focusFileTreeItem(allItems, currentIdx);
+      } else if (e.key === 'ArrowUp' || e.key === 'k') {
+        e.preventDefault();
+        currentIdx = Math.max(currentIdx - 1, 0);
+        focusFileTreeItem(allItems, currentIdx);
+      } else if (e.key === 'Enter' || e.key === ' ') {
+        e.preventDefault();
+        if (fileTreeFocusedItem) fileTreeFocusedItem.click();
+      } else if (e.key === 'ArrowRight' || e.key === 'l') {
+        // Expand folder
+        if (fileTreeFocusedItem && fileTreeFocusedItem.classList.contains('file-tree-folder')) {
+          const arrow = fileTreeFocusedItem.querySelector('.file-tree-arrow');
+          if (arrow && arrow.textContent === '\u25B6') {
+            e.preventDefault();
+            fileTreeFocusedItem.click();
+          }
+        }
+      } else if (e.key === 'ArrowLeft' || e.key === 'h') {
+        // Collapse folder
+        if (fileTreeFocusedItem && fileTreeFocusedItem.classList.contains('file-tree-folder')) {
+          const arrow = fileTreeFocusedItem.querySelector('.file-tree-arrow');
+          if (arrow && arrow.textContent === '\u25BC') {
+            e.preventDefault();
+            fileTreeFocusedItem.click();
+          }
+        }
+      } else if (e.key === 'Escape') {
+        clearFileTreeFocus();
+        term.focus();
+      }
+    });
+  }
+
+  function focusFileTreeItem(allItems, idx) {
+    if (fileTreeFocusedItem) fileTreeFocusedItem.classList.remove('file-tree-focused');
+    fileTreeFocusedItem = allItems[idx];
+    if (fileTreeFocusedItem) {
+      fileTreeFocusedItem.classList.add('file-tree-focused');
+      fileTreeFocusedItem.scrollIntoView({ block: 'nearest' });
+    }
+  }
+
+  function clearFileTreeFocus() {
+    if (fileTreeFocusedItem) {
+      fileTreeFocusedItem.classList.remove('file-tree-focused');
+      fileTreeFocusedItem = null;
+    }
+  }
+
+  // --- Session context menu ---
+  function showSessionContextMenu(e, session) {
+    e.preventDefault();
+    // Remove any existing context menu
+    const existing = document.getElementById('session-context-menu');
+    if (existing) existing.remove();
+
+    const menu = document.createElement('div');
+    menu.id = 'session-context-menu';
+    menu.className = 'context-menu';
+
+    const items = [
+      { label: 'Rename', action: () => {
+        const nameEl = projectListEl.querySelector(`li[data-session-id="${session.id}"] .session-name`);
+        if (nameEl) startSessionRename(nameEl, session.id, session.name);
+      }},
+      { label: pinnedSessions.has(session.id) ? 'Unpin' : 'Pin to Top', action: () => togglePinSession(session.id) },
+      { label: 'Set Color Label', action: () => {
+        // Re-find the session element and show color picker near it
+        const li = projectListEl.querySelector(`li[data-session-id="${session.id}"]`);
+        if (li) {
+          const rect = li.getBoundingClientRect();
+          showSessionColorPicker({ stopPropagation: () => {}, target: li }, session.id);
+        }
+      }},
+      { label: 'Clone', action: () => cloneSession(session.id) },
+      { type: 'separator' },
+      { label: 'Copy Session ID', action: () => {
+        navigator.clipboard.writeText(session.id);
+        showToast('Session ID copied', 'success', 2000);
+      }},
+      { label: 'Copy Branch Name', action: () => {
+        if (session.branchName) {
+          navigator.clipboard.writeText(session.branchName);
+          showToast('Branch name copied', 'success', 2000);
+        }
+      }, disabled: !session.branchName },
+    ];
+
+    if (session.worktreePath) {
+      items.push({ type: 'separator' });
+      items.push({ label: 'Archive', action: () => archiveSession(session.id, session.branchName) });
+    }
+
+    items.push({ type: 'separator' });
+    items.push({ label: 'Delete', className: 'context-menu-danger', action: () => deleteSession(session.id) });
+
+    for (const item of items) {
+      if (item.type === 'separator') {
+        const sep = document.createElement('div');
+        sep.className = 'context-menu-separator';
+        menu.appendChild(sep);
+        continue;
+      }
+      const el = document.createElement('div');
+      el.className = 'context-menu-item' + (item.className ? ' ' + item.className : '') + (item.disabled ? ' disabled' : '');
+      el.textContent = item.label;
+      if (!item.disabled) {
+        el.onclick = () => {
+          menu.remove();
+          item.action();
+        };
+      }
+      menu.appendChild(el);
+    }
+
+    // Position near cursor, clamping to viewport
+    document.body.appendChild(menu);
+    const menuRect = menu.getBoundingClientRect();
+    let top = e.clientY;
+    let left = e.clientX;
+    if (top + menuRect.height > window.innerHeight) top = window.innerHeight - menuRect.height - 4;
+    if (left + menuRect.width > window.innerWidth) left = window.innerWidth - menuRect.width - 4;
+    menu.style.top = top + 'px';
+    menu.style.left = left + 'px';
+
+    // Close on outside click
+    const closeCtx = (ev) => {
+      if (!menu.contains(ev.target)) {
+        menu.remove();
+        document.removeEventListener('mousedown', closeCtx);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', closeCtx), 0);
+  }
+
+  // --- Enhanced file viewer breadcrumb navigation ---
+  // The existing renderFileViewerBreadcrumb already makes directory segments clickable to
+  // expand the file tree. We enhance it to also navigate to the parent folder in the file list
+  // (already implemented in the existing code, enhancement is the browse-to-folder ability).
+
+  // --- Auto-reload for externally changed files ---
+  let fileWatchTimers = new Map(); // tabId -> {timer, mtime}
+
+  function startWatchingFile(tabId, filePath) {
+    stopWatchingFile(tabId);
+    const timer = setInterval(async () => {
+      if (!activeSessionId) return;
+      try {
+        const res = await fetch(`/api/file/mtime?sessionId=${activeSessionId}&path=${encodeURIComponent(filePath)}`);
+        if (!res.ok) return;
+        const data = await res.json();
+        const entry = fileWatchTimers.get(tabId);
+        if (!entry) return;
+        if (entry.mtime && data.mtime && data.mtime !== entry.mtime) {
+          // File changed externally
+          entry.mtime = data.mtime;
+          const tab = openTabs.find(t => t.id === tabId);
+          if (tab && !dirtyTabs.has(tabId)) {
+            showFileChangedBanner(tabId, filePath);
+          }
+        }
+        if (!entry.mtime && data.mtime) {
+          entry.mtime = data.mtime;
+        }
+      } catch { /* ignore poll errors */ }
+    }, 5000); // poll every 5 seconds
+    fileWatchTimers.set(tabId, { timer, mtime: null });
+  }
+
+  function stopWatchingFile(tabId) {
+    const entry = fileWatchTimers.get(tabId);
+    if (entry) {
+      clearInterval(entry.timer);
+      fileWatchTimers.delete(tabId);
+    }
+  }
+
+  function showFileChangedBanner(tabId, filePath) {
+    // Only show for active tab
+    if (tabId !== activeTabId) return;
+    // Check if banner already exists
+    if (document.getElementById('file-changed-banner')) return;
+
+    const banner = document.createElement('div');
+    banner.id = 'file-changed-banner';
+    banner.className = 'file-changed-banner';
+    banner.innerHTML = '<span>File changed on disk.</span>';
+
+    const reloadBtn = document.createElement('button');
+    reloadBtn.textContent = 'Reload';
+    reloadBtn.onclick = async () => {
+      banner.remove();
+      const tab = openTabs.find(t => t.id === tabId);
+      if (tab) {
+        await refreshFileTab(tab);
+      }
+    };
+
+    const dismissBtn = document.createElement('button');
+    dismissBtn.textContent = 'Dismiss';
+    dismissBtn.onclick = () => banner.remove();
+
+    banner.appendChild(reloadBtn);
+    banner.appendChild(dismissBtn);
+
+    const fvHeader = document.querySelector('.file-viewer-header');
+    if (fvHeader) {
+      fvHeader.parentElement.insertBefore(banner, fvHeader.nextSibling);
+    }
+  }
+
+  async function refreshFileTab(tab) {
+    if (!activeSessionId || !tab) return;
+    try {
+      const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(tab.fullPath)}`);
+      if (!res.ok) return;
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('text/plain')) {
+        tab.content = await res.text();
+        tab.type = 'text';
+      } else if (contentType.includes('image/')) {
+        const blob = await res.blob();
+        tab.imageUrl = URL.createObjectURL(blob);
+        tab.type = 'image';
+      }
+      if (tab.id === activeTabId) renderFileContent(tab);
+    } catch { /* ignore */ }
+  }
+
+  // --- Ctrl+P Quick File Open ---
+  let quickOpenIdx = 0;
+  let quickOpenItems = [];
+
+  function openQuickOpen() {
+    if (!quickOpenOverlay || !activeSessionId) return;
+    quickOpenOverlay.classList.remove('hidden');
+    quickOpenInput.value = '';
+    quickOpenResults.innerHTML = '';
+    quickOpenIdx = 0;
+    quickOpenItems = [];
+    renderQuickOpenResults('');
+    quickOpenInput.focus();
+  }
+
+  function closeQuickOpen() {
+    if (!quickOpenOverlay) return;
+    quickOpenOverlay.classList.add('hidden');
+  }
+
+  function renderQuickOpenResults(query) {
+    const q = query.toLowerCase();
+    // Collect all files from file tree
+    const paths = collectAllFilePaths();
+    // Fuzzy filter
+    let items;
+    if (!q) {
+      // Show recent files first, then others
+      const recent = recentFiles.filter(f => paths.includes(f));
+      const others = paths.filter(f => !recent.includes(f)).slice(0, 15);
+      items = [...recent, ...others].slice(0, 20);
+    } else {
+      items = paths.filter(p => {
+        const name = p.split('/').pop().toLowerCase();
+        const full = p.toLowerCase();
+        return fuzzyMatch(q, name) || fuzzyMatch(q, full);
+      }).sort((a, b) => {
+        // Prioritize filename matches over path matches
+        const aName = a.split('/').pop().toLowerCase();
+        const bName = b.split('/').pop().toLowerCase();
+        const aScore = aName.startsWith(q) ? 0 : aName.includes(q) ? 1 : 2;
+        const bScore = bName.startsWith(q) ? 0 : bName.includes(q) ? 1 : 2;
+        return aScore - bScore;
+      }).slice(0, 20);
+    }
+
+    quickOpenItems = items;
+    quickOpenIdx = 0;
+    quickOpenResults.innerHTML = '';
+
+    if (items.length === 0) {
+      quickOpenResults.innerHTML = '<div class="quick-open-empty">No files found</div>';
+      return;
+    }
+
+    for (let i = 0; i < items.length; i++) {
+      const el = document.createElement('div');
+      el.className = 'quick-open-item' + (i === 0 ? ' active' : '');
+      const fname = items[i].split('/').pop();
+      const dir = items[i].includes('/') ? items[i].substring(0, items[i].lastIndexOf('/')) : '';
+      const isRecent = recentFiles.includes(items[i]);
+
+      const nameSpan = document.createElement('span');
+      nameSpan.className = 'quick-open-name';
+      nameSpan.textContent = fname;
+
+      const dirSpan = document.createElement('span');
+      dirSpan.className = 'quick-open-dir';
+      dirSpan.textContent = dir;
+
+      el.appendChild(nameSpan);
+      if (isRecent && !q) {
+        const badge = document.createElement('span');
+        badge.className = 'quick-open-recent-badge';
+        badge.textContent = 'recent';
+        el.appendChild(badge);
+      }
+      el.appendChild(dirSpan);
+
+      el.onmousedown = (e) => {
+        e.preventDefault();
+        selectQuickOpenItem(i);
+      };
+      el.onmouseenter = () => {
+        quickOpenIdx = i;
+        updateQuickOpenSelection();
+      };
+      quickOpenResults.appendChild(el);
+    }
+  }
+
+  function selectQuickOpenItem(idx) {
+    if (idx < 0 || idx >= quickOpenItems.length) return;
+    const filePath = quickOpenItems[idx];
+    const filename = filePath.split('/').pop();
+    closeQuickOpen();
+    openFileTab(filePath, filename);
+  }
+
+  function updateQuickOpenSelection() {
+    const items = quickOpenResults.querySelectorAll('.quick-open-item');
+    items.forEach((el, i) => el.classList.toggle('active', i === quickOpenIdx));
+  }
+
+  function fuzzyMatch(query, text) {
+    let qi = 0;
+    for (let i = 0; i < text.length && qi < query.length; i++) {
+      if (text[i] === query[qi]) qi++;
+    }
+    return qi === query.length;
+  }
+
+  if (quickOpenInput) {
+    quickOpenInput.oninput = debounce(() => {
+      renderQuickOpenResults(quickOpenInput.value.trim());
+    }, 100);
+
+    quickOpenInput.onkeydown = (e) => {
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        quickOpenIdx = Math.min(quickOpenIdx + 1, quickOpenItems.length - 1);
+        updateQuickOpenSelection();
+        const items = quickOpenResults.querySelectorAll('.quick-open-item');
+        if (items[quickOpenIdx]) items[quickOpenIdx].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        quickOpenIdx = Math.max(quickOpenIdx - 1, 0);
+        updateQuickOpenSelection();
+        const items = quickOpenResults.querySelectorAll('.quick-open-item');
+        if (items[quickOpenIdx]) items[quickOpenIdx].scrollIntoView({ block: 'nearest' });
+      } else if (e.key === 'Enter') {
+        e.preventDefault();
+        selectQuickOpenItem(quickOpenIdx);
+      } else if (e.key === 'Escape') {
+        closeQuickOpen();
+      }
+    };
+  }
+
+  if (quickOpenOverlay) {
+    quickOpenOverlay.onclick = (e) => {
+      if (e.target === quickOpenOverlay) closeQuickOpen();
+    };
+  }
+
+  // --- Recent files tracking ---
+  function trackRecentFile(filePath) {
+    recentFiles = recentFiles.filter(f => f !== filePath);
+    recentFiles.unshift(filePath);
+    if (recentFiles.length > MAX_RECENT_FILES) recentFiles.pop();
+    try { localStorage.setItem('claude-console-recent-files', JSON.stringify(recentFiles)); } catch {}
+  }
+
+  // --- Session color labels ---
+  const SESSION_COLORS = [
+    { name: 'None', value: '' },
+    { name: 'Red', value: '#d95555' },
+    { name: 'Orange', value: '#d97757' },
+    { name: 'Yellow', value: '#d4b87a' },
+    { name: 'Green', value: '#7cba6a' },
+    { name: 'Blue', value: '#7aadca' },
+    { name: 'Purple', value: '#b07acc' },
+    { name: 'Pink', value: '#cc7aaa' },
+  ];
+
+  function setSessionColor(sessionId, color) {
+    if (!color) {
+      delete sessionColors[sessionId];
+    } else {
+      sessionColors[sessionId] = color;
+    }
+    try { localStorage.setItem('claude-console-session-colors', JSON.stringify(sessionColors)); } catch {}
+    renderSidebar();
+  }
+
+  function showSessionColorPicker(e, sessionId) {
+    e.stopPropagation();
+    // Remove existing picker
+    const existing = document.getElementById('session-color-picker');
+    if (existing) existing.remove();
+
+    const picker = document.createElement('div');
+    picker.id = 'session-color-picker';
+    picker.className = 'session-color-picker';
+
+    for (const c of SESSION_COLORS) {
+      const swatch = document.createElement('button');
+      swatch.className = 'color-swatch' + (sessionColors[sessionId] === c.value ? ' active' : '');
+      swatch.title = c.name;
+      if (c.value) {
+        swatch.style.background = c.value;
+      } else {
+        swatch.textContent = '\u00D7';
+        swatch.style.color = '#8c8478';
+        swatch.style.fontSize = '12px';
+      }
+      swatch.onclick = (ev) => {
+        ev.stopPropagation();
+        setSessionColor(sessionId, c.value);
+        picker.remove();
+      };
+      picker.appendChild(swatch);
+    }
+
+    // Position near the target
+    document.body.appendChild(picker);
+    const rect = e.target.getBoundingClientRect();
+    picker.style.top = (rect.bottom + 4) + 'px';
+    picker.style.left = rect.left + 'px';
+
+    const closePicker = (ev) => {
+      if (!picker.contains(ev.target)) {
+        picker.remove();
+        document.removeEventListener('mousedown', closePicker);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', closePicker), 0);
+  }
+
+  // --- Expand All / Collapse All file tree ---
+  if (btnExpandAll) {
+    btnExpandAll.onclick = async () => {
+      // Collect all directories in the tree and expand them
+      const allFolders = fileTreeEl.querySelectorAll('.file-tree-folder');
+      for (const folder of allFolders) {
+        const item = folder.parentElement;
+        if (!item) continue;
+        const children = item.querySelector('.file-tree-children');
+        const arrow = folder.querySelector('.file-tree-arrow');
+        if (children && !children.classList.contains('expanded')) {
+          // Get dirPath from the folder
+          const label = folder.querySelector('.file-tree-label');
+          if (!label) continue;
+          // Find the dir path by building from parents
+          let dirPath = buildDirPath(folder);
+          if (dirPath !== null) {
+            expandedDirs.add(dirPath);
+          }
+        }
+      }
+      // Re-render tree with all expanded
+      await renderFileTreeDir(fileTreeEl, '', 0);
+    };
+  }
+
+  if (btnCollapseAll) {
+    btnCollapseAll.onclick = () => {
+      expandedDirs.clear();
+      renderFileTreeDir(fileTreeEl, '', 0);
+    };
+  }
+
+  function buildDirPath(folderRow) {
+    // Walk the DOM to build the directory path from nested structure
+    const label = folderRow.querySelector('.file-tree-label');
+    if (!label) return null;
+    const name = label.textContent;
+
+    // Find parent folder rows
+    const parts = [name];
+    let el = folderRow.parentElement; // the item wrapper
+    while (el) {
+      const parentChildren = el.parentElement;
+      if (!parentChildren || !parentChildren.classList.contains('file-tree-children')) break;
+      const parentItem = parentChildren.parentElement;
+      if (!parentItem) break;
+      const parentRow = parentItem.querySelector(':scope > .file-tree-folder');
+      if (parentRow) {
+        const parentLabel = parentRow.querySelector('.file-tree-label');
+        if (parentLabel) parts.unshift(parentLabel.textContent);
+      }
+      el = parentItem;
+    }
+    return parts.join('/');
+  }
+
+  // --- File preview tooltip on hover ---
+  let previewHoverTimer = null;
+
+  function setupFilePreviewHover(row, filePath) {
+    row.addEventListener('mouseenter', () => {
+      if (previewHoverTimer) clearTimeout(previewHoverTimer);
+      previewHoverTimer = setTimeout(async () => {
+        await showFilePreview(filePath, row);
+      }, 600);
+    });
+
+    row.addEventListener('mouseleave', () => {
+      if (previewHoverTimer) { clearTimeout(previewHoverTimer); previewHoverTimer = null; }
+      hideFilePreview();
+    });
+  }
+
+  async function showFilePreview(filePath, anchorEl) {
+    if (!filePreviewTooltip || !activeSessionId) return;
+    const ext = filePath.split('.').pop().toLowerCase();
+    // Only preview text-like files
+    const textExts = new Set(['js','ts','jsx','tsx','py','rb','go','rs','java','c','cpp','h','css','html','json','yaml','yml','toml','md','txt','sh','bash','sql','xml','vue','svelte','cfg','ini','env','gitignore','dockerignore']);
+    if (!textExts.has(ext)) return;
+
+    try {
+      const res = await fetch(`/api/file?sessionId=${activeSessionId}&path=${encodeURIComponent(filePath)}`);
+      if (!res.ok) return;
+      const contentType = res.headers.get('content-type') || '';
+      if (!contentType.includes('text/plain')) return;
+      const content = await res.text();
+
+      // Show first 8 lines
+      const lines = content.split('\n').slice(0, 8);
+      const preview = lines.join('\n');
+      const lineCount = content.split('\n').length;
+
+      filePreviewTooltip.innerHTML = '';
+      const header = document.createElement('div');
+      header.className = 'file-preview-header';
+      header.textContent = `${filePath} (${lineCount} lines)`;
+      const pre = document.createElement('pre');
+      pre.className = 'file-preview-content';
+      pre.textContent = preview;
+      if (content.split('\n').length > 8) {
+        pre.textContent += '\n...';
+      }
+      filePreviewTooltip.appendChild(header);
+      filePreviewTooltip.appendChild(pre);
+
+      // Position tooltip near the anchor
+      const rect = anchorEl.getBoundingClientRect();
+      filePreviewTooltip.style.top = (rect.top) + 'px';
+      filePreviewTooltip.style.left = (rect.right + 8) + 'px';
+      // Clamp to viewport
+      filePreviewTooltip.classList.remove('hidden');
+      const ttRect = filePreviewTooltip.getBoundingClientRect();
+      if (ttRect.bottom > window.innerHeight) {
+        filePreviewTooltip.style.top = Math.max(0, window.innerHeight - ttRect.height - 8) + 'px';
+      }
+      if (ttRect.right > window.innerWidth) {
+        filePreviewTooltip.style.left = (rect.left - ttRect.width - 8) + 'px';
+      }
+    } catch { /* ignore */ }
+  }
+
+  function hideFilePreview() {
+    if (filePreviewTooltip) filePreviewTooltip.classList.add('hidden');
+  }
+
   // --- Init ---
   initTerminal();
   initShellTerminal();
+  initFileTreeKeyboard();
   startSidebarTimeUpdates();
   updateFontSizeDisplay();
   connect();
