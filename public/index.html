@@ -26,6 +26,13 @@
         <input id="sidebar-filter" type="text" placeholder="Filter sessions..." autocomplete="off">
       </div>
       <div id="project-list"></div>
+      <div id="accounts-section">
+        <div id="accounts-header">
+          <span class="sidebar-title">Accounts</span>
+          <button id="btn-add-account" title="Add account">+</button>
+        </div>
+        <div id="account-list"></div>
+      </div>
     </aside>
     <div id="sidebar-divider"></div>
     <main id="terminal-container">
@@ -193,6 +200,29 @@
       <div class="modal-buttons">
         <button id="btn-modal-cancel">Cancel</button>
         <button id="btn-modal-create" disabled>Create Project</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Account Modal -->
+  <div id="account-modal-overlay" class="hidden">
+    <div id="account-modal" class="modal-panel">
+      <h2 id="account-modal-title">Add Account</h2>
+      <input id="account-modal-id" type="hidden">
+      <label for="account-modal-name">Account Name</label>
+      <input id="account-modal-name" type="text" placeholder="e.g. Work API Key, Bedrock Prod" autofocus>
+      <label for="account-modal-provider">Provider</label>
+      <select id="account-modal-provider">
+        <option value="claude">Claude</option>
+        <option value="codex">Codex</option>
+      </select>
+      <label>Environment Variables</label>
+      <div class="account-env-hint">Set API keys and provider config passed to the CLI process. Only known provider env vars are allowed (ANTHROPIC_*, AWS_*, CLAUDE_CODE_*, OPENAI_*, etc.).</div>
+      <div id="account-env-rows"></div>
+      <button id="btn-account-add-env" class="btn-account-add-env" type="button">+ Add Variable</button>
+      <div class="modal-buttons">
+        <button id="btn-account-cancel">Cancel</button>
+        <button id="btn-account-save">Save Account</button>
       </div>
     </div>
   </div>

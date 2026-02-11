@@ -337,6 +337,243 @@ body {
   color: #d97757;
 }
 
+/* --- Accounts section --- */
+
+#accounts-section {
+  border-top: 1px solid #3d3a36;
+  padding: 8px 0;
+  flex-shrink: 0;
+}
+
+#accounts-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 12px 4px 16px;
+}
+
+#accounts-header .sidebar-title {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #8c8478;
+}
+
+#btn-add-account {
+  background: none;
+  border: none;
+  color: #8c8478;
+  font-size: 16px;
+  cursor: pointer;
+  padding: 0 4px;
+  line-height: 1;
+}
+#btn-add-account:hover {
+  color: #d97757;
+}
+
+#account-list {
+  padding: 0 8px;
+}
+
+.account-item {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  color: #c4bdb2;
+  cursor: pointer;
+}
+.account-item:hover {
+  background: #3d3a36;
+}
+
+.account-provider-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+  background: #3d3a36;
+  color: #8c8478;
+  text-transform: uppercase;
+  letter-spacing: 0.3px;
+  flex-shrink: 0;
+}
+
+.account-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.account-actions {
+  display: flex;
+  gap: 2px;
+  opacity: 0;
+  flex-shrink: 0;
+}
+.account-item:hover .account-actions {
+  opacity: 1;
+}
+
+.account-action-btn {
+  background: none;
+  border: none;
+  color: #8c8478;
+  font-size: 11px;
+  cursor: pointer;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+.account-action-btn:hover {
+  background: #4d4a46;
+  color: #f0ebe3;
+}
+.account-action-btn.delete:hover {
+  color: #d97757;
+}
+
+/* --- Account Modal --- */
+
+.modal-panel {
+  background: #1e1d1b;
+  border-radius: 8px;
+  padding: 20px;
+  width: 480px;
+  max-width: 90vw;
+  max-height: 80vh;
+  overflow-y: auto;
+  color: #f0ebe3;
+}
+.modal-panel h2 {
+  margin: 0 0 16px;
+  font-size: 16px;
+}
+.modal-panel label {
+  display: block;
+  font-size: 12px;
+  color: #8c8478;
+  margin: 12px 0 4px;
+}
+.modal-panel input[type="text"],
+.modal-panel select {
+  width: 100%;
+  padding: 6px 10px;
+  background: #2b2a27;
+  border: 1px solid #3d3a36;
+  border-radius: 4px;
+  color: #f0ebe3;
+  font-size: 13px;
+  outline: none;
+  box-sizing: border-box;
+}
+.modal-panel input[type="text"]:focus,
+.modal-panel select:focus {
+  border-color: #d97757;
+}
+.modal-panel select option {
+  background: #2b2a27;
+  color: #f0ebe3;
+}
+
+.account-env-hint {
+  font-size: 11px;
+  color: #6b6560;
+  margin-bottom: 8px;
+  line-height: 1.4;
+}
+
+#account-env-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.account-env-row {
+  display: flex;
+  gap: 4px;
+  align-items: center;
+}
+.account-env-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 5px 8px;
+  background: #2b2a27;
+  border: 1px solid #3d3a36;
+  border-radius: 4px;
+  color: #f0ebe3;
+  font-size: 12px;
+  outline: none;
+}
+.account-env-row input:focus {
+  border-color: #d97757;
+}
+.account-env-row input.env-key {
+  flex: 0.7;
+  font-family: monospace;
+}
+.account-env-row input.env-val {
+  flex: 1;
+}
+.account-env-row .btn-remove-env {
+  background: none;
+  border: none;
+  color: #8c8478;
+  cursor: pointer;
+  padding: 2px 6px;
+  font-size: 14px;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+.account-env-row .btn-remove-env:hover {
+  background: #3d3a36;
+  color: #d97757;
+}
+
+.btn-account-add-env {
+  background: none;
+  border: 1px dashed #3d3a36;
+  border-radius: 4px;
+  color: #8c8478;
+  cursor: pointer;
+  padding: 4px 10px;
+  font-size: 11px;
+  margin-top: 4px;
+  text-align: left;
+}
+.btn-account-add-env:hover {
+  border-color: #d97757;
+  color: #d97757;
+}
+
+/* --- Account selector in session form --- */
+
+.inline-account-select {
+  padding: 4px 4px;
+  background: #2b2a27;
+  border: 1px solid #3d3a36;
+  border-radius: 4px;
+  color: #f0ebe3;
+  font-size: 11px;
+  outline: none;
+  cursor: pointer;
+  flex: 1;
+  min-width: 0;
+}
+.inline-account-select:focus { border-color: #d97757; }
+.inline-account-select option {
+  background: #2b2a27;
+  color: #f0ebe3;
+}
+
+.inline-account-row {
+  display: flex;
+  gap: 4px;
+}
+
 /* --- Sidebar divider --- */
 
 #sidebar-divider {
@@ -3301,6 +3538,51 @@ body.light-theme .provider-toggle {
 
 body.light-theme .provider-toggle.active {
   background: #d9d1c7;
+  color: #3d3a36;
+}
+
+body.light-theme #accounts-section {
+  border-top-color: #d9d1c7;
+}
+body.light-theme .account-item:hover {
+  background: #e8e2da;
+}
+body.light-theme .account-provider-badge {
+  background: #e8e2da;
+  color: #6b6560;
+}
+body.light-theme .account-action-btn:hover {
+  background: #d9d1c7;
+}
+body.light-theme .modal-panel {
+  background: #faf8f5;
+  color: #3d3a36;
+}
+body.light-theme .modal-panel input[type="text"],
+body.light-theme .modal-panel select {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+  color: #3d3a36;
+}
+body.light-theme .modal-panel input[type="text"]:focus,
+body.light-theme .modal-panel select:focus {
+  border-color: #d97757;
+}
+body.light-theme .account-env-row input {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+  color: #3d3a36;
+}
+body.light-theme .account-env-row input:focus {
+  border-color: #d97757;
+}
+body.light-theme .btn-account-add-env {
+  border-color: #d9d1c7;
+  color: #8c8478;
+}
+body.light-theme .inline-account-select {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
   color: #3d3a36;
 }
 
