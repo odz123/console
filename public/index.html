@@ -5,6 +5,8 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Claude Console</title>
   <link rel="stylesheet" href="/vendor/xterm.css">
+  <link rel="stylesheet" href="/vendor/hljs-github-dark.min.css" id="hljs-theme-dark">
+  <link rel="stylesheet" href="/vendor/hljs-github.min.css" id="hljs-theme-light" disabled>
   <link rel="stylesheet" href="/style.css">
 </head>
 <body>
@@ -51,7 +53,9 @@
             <button id="file-viewer-split" class="fv-btn hidden" title="Toggle split diff view">Split</button>
             <button id="file-viewer-wrap" class="fv-btn" title="Toggle word wrap">Wrap</button>
             <button id="file-viewer-copy" class="fv-btn" title="Copy file content">Copy</button>
+            <button id="file-viewer-download" class="fv-btn" title="Download file">Download</button>
             <button id="file-viewer-refresh" title="Refresh">Refresh</button>
+            <span id="file-viewer-info" class="fv-info"></span>
           </div>
         </div>
         <div id="fv-search-bar" class="fv-search-bar hidden">
@@ -260,6 +264,7 @@
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Tab</kbd><span>Cycle tabs</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find (and replace) in file</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>S</kbd><span>Save file (in edit mode)</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>G</kbd><span>Go to line</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>B</kbd><span>Toggle sidebar</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Focus mode</span></div>
@@ -309,6 +314,7 @@
   <script src="/vendor/xterm-addon-webgl.js"></script>
   <script src="/vendor/marked.min.js"></script>
   <script src="/vendor/purify.min.js"></script>
+  <script src="/vendor/highlight.min.js"></script>
   <script src="/app.js"></script>
 </body>
 </html>

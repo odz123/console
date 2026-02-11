@@ -1546,6 +1546,35 @@ body {
 }
 .goto-input:focus { border-color: #d97757; }
 
+/* File info display */
+.fv-info {
+  font-size: 11px;
+  color: #8c8478;
+  margin-left: 8px;
+  white-space: nowrap;
+}
+
+/* Syntax highlighted line text */
+.line-text.hljs {
+  background: transparent !important;
+  padding: 0 !important;
+  overflow: visible !important;
+}
+.line-text code.hljs {
+  background: transparent !important;
+  padding: 0 !important;
+}
+
+/* Terminal search match highlight */
+.term-search-highlight {
+  background: rgba(217, 119, 87, 0.35);
+  border-radius: 2px;
+}
+.term-search-highlight-current {
+  background: rgba(217, 119, 87, 0.65);
+  border-radius: 2px;
+}
+
 /* Binary file placeholder */
 #file-viewer-content.binary-file {
   display: flex;
@@ -3480,6 +3509,17 @@ body.light-theme .fv-btn {
 
 body.light-theme .fv-btn:hover {
   background: #ccc4b8;
+}
+
+body.light-theme .fv-info {
+  color: #8a8278;
+}
+
+body.light-theme .term-search-highlight {
+  background: rgba(217, 119, 87, 0.25);
+}
+body.light-theme .term-search-highlight-current {
+  background: rgba(217, 119, 87, 0.50);
 }
 
 body.light-theme #file-viewer-content {
