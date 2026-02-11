@@ -51,6 +51,9 @@
             <button id="fv-diff-prev" class="fv-btn hidden" title="Previous change">&uarr;&#916;</button>
             <button id="fv-diff-next" class="fv-btn hidden" title="Next change">&darr;&#916;</button>
             <button id="file-viewer-split" class="fv-btn hidden" title="Toggle split diff view">Split</button>
+            <button id="fv-bookmark-toggle" class="fv-btn" title="Toggle bookmark on current line (Ctrl+Shift+M)">&#9873;</button>
+            <button id="fv-bookmark-prev" class="fv-btn" title="Previous bookmark (Shift+F2)">&#8593;&#9873;</button>
+            <button id="fv-bookmark-next" class="fv-btn" title="Next bookmark (F2)">&#8595;&#9873;</button>
             <button id="file-viewer-wrap" class="fv-btn" title="Toggle word wrap">Wrap</button>
             <button id="file-viewer-copy" class="fv-btn" title="Copy file content">Copy</button>
             <button id="file-viewer-refresh" title="Refresh">Refresh</button>
@@ -128,6 +131,7 @@
           <div id="right-panel-tabs">
             <button class="rp-tab active" data-rp-tab="files">Files</button>
             <button class="rp-tab" data-rp-tab="git">Git</button>
+            <button class="rp-tab" data-rp-tab="history">History</button>
           </div>
           <span id="right-panel-path"></span>
           <button id="btn-expand-all" class="panel-toggle" title="Expand all folders">&#x25BD;</button>
@@ -162,6 +166,13 @@
             </div>
             <div id="git-log-list" class="git-log-list"></div>
           </div>
+        </div>
+        <div id="cmd-history-panel" class="cmd-history-panel hidden">
+          <div class="cmd-history-header">
+            <span class="cmd-history-title">Command History</span>
+            <button id="btn-cmd-history-clear" class="panel-toggle" title="Clear history">&times;</button>
+          </div>
+          <div id="cmd-history-list" class="cmd-history-list"></div>
         </div>
       </div>
       <div id="right-panel-divider"></div>
@@ -226,6 +237,15 @@
     </div>
   </div>
 
+  <!-- Tab preview tooltip -->
+  <div id="tab-preview-tooltip" class="tab-preview-tooltip hidden"></div>
+
+  <!-- Auto-save notification -->
+  <div id="autosave-toast" class="autosave-toast hidden">
+    <span id="autosave-msg">Auto-saved</span>
+    <button id="autosave-undo" class="autosave-undo-btn">Undo</button>
+  </div>
+
   <!-- Session search overlay -->
   <div id="session-search-overlay" class="quick-open-overlay hidden">
     <div class="quick-open-panel session-search-panel">
@@ -281,6 +301,8 @@
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>P</kbd><span>Quick open file</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd><span>Go to symbol</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F</kbd><span>Search all sessions</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>M</kbd><span>Toggle bookmark</span></div>
+          <div class="shortcut-row"><kbd>F2</kbd>/<kbd>Shift</kbd>+<kbd>F2</kbd><span>Next / prev bookmark</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Tab</kbd><span>Cycle tabs</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find (and replace) in file</span></div>

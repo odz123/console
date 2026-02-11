@@ -4297,6 +4297,322 @@ body.light-theme .session-search-icon {
   color: #d97757;
 }
 
+/* --- Line bookmarks --- */
+
+.bookmark-marker {
+  color: #d97757;
+  font-size: 11px;
+  margin-right: 2px;
+  cursor: pointer;
+}
+
+.bookmark-marker:hover {
+  color: #f09070;
+}
+
+.line-row.bookmarked {
+  background: rgba(217, 119, 87, 0.08);
+}
+
+.line-row.bookmarked .line-num {
+  color: #d97757;
+}
+
+/* --- Auto-save toast --- */
+
+.autosave-toast {
+  position: fixed;
+  bottom: 40px;
+  right: 16px;
+  background: #343230;
+  border: 1px solid #3d3a36;
+  border-radius: 6px;
+  padding: 8px 14px;
+  color: #c5bdb3;
+  font-size: 13px;
+  z-index: 3000;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+}
+
+.autosave-toast.hidden {
+  display: none;
+}
+
+.autosave-undo-btn {
+  background: none;
+  border: 1px solid #d97757;
+  color: #d97757;
+  border-radius: 4px;
+  padding: 2px 10px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.autosave-undo-btn:hover {
+  background: rgba(217, 119, 87, 0.15);
+}
+
+/* --- Tab preview tooltip --- */
+
+.tab-preview-tooltip {
+  position: fixed;
+  z-index: 2500;
+  background: #343230;
+  border: 1px solid #3d3a36;
+  border-radius: 6px;
+  padding: 0;
+  max-width: 400px;
+  min-width: 200px;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.tab-preview-tooltip.hidden {
+  display: none;
+}
+
+.tab-preview-header {
+  font-size: 11px;
+  color: #8c8478;
+  padding: 6px 10px;
+  border-bottom: 1px solid #3d3a36;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.tab-preview-content {
+  font-family: monospace;
+  font-size: 11px;
+  color: #c5bdb3;
+  padding: 8px 10px;
+  margin: 0;
+  max-height: 180px;
+  overflow: hidden;
+  white-space: pre;
+  line-height: 1.4;
+}
+
+/* --- Tab changed indicator --- */
+
+.tab-changed {
+  font-size: 10px;
+  font-weight: bold;
+  color: #d9a757;
+  background: rgba(217, 167, 87, 0.15);
+  border-radius: 3px;
+  padding: 0 4px;
+  margin-left: 4px;
+}
+
+/* --- Command history panel --- */
+
+.cmd-history-panel {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.cmd-history-panel.hidden {
+  display: none;
+}
+
+.cmd-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  border-bottom: 1px solid #3d3a36;
+}
+
+.cmd-history-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #c5bdb3;
+}
+
+.cmd-history-list {
+  overflow-y: auto;
+  max-height: calc(100% - 40px);
+}
+
+.cmd-history-empty {
+  color: #8c8478;
+  text-align: center;
+  padding: 20px;
+  font-size: 13px;
+}
+
+.cmd-history-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 12px;
+  border-bottom: 1px solid #3d3a36;
+  font-size: 12px;
+}
+
+.cmd-history-item:hover {
+  background: rgba(61, 58, 54, 0.5);
+}
+
+.cmd-history-time {
+  color: #8c8478;
+  font-size: 10px;
+}
+
+.cmd-history-text {
+  color: #e8dfd5;
+  font-family: monospace;
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.4;
+}
+
+.cmd-history-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 4px;
+  opacity: 0;
+  transition: opacity 0.15s;
+}
+
+.cmd-history-item:hover .cmd-history-actions {
+  opacity: 1;
+}
+
+.cmd-history-btn {
+  background: none;
+  border: 1px solid #3d3a36;
+  color: #c5bdb3;
+  border-radius: 3px;
+  padding: 1px 8px;
+  cursor: pointer;
+  font-size: 11px;
+}
+
+.cmd-history-btn:hover {
+  background: rgba(217, 119, 87, 0.15);
+  border-color: #d97757;
+  color: #d97757;
+}
+
+/* History tab badge indicator */
+.rp-tab[data-badge="true"]::after {
+  content: '';
+  width: 6px;
+  height: 6px;
+  background: #d97757;
+  border-radius: 50%;
+  display: inline-block;
+  margin-left: 4px;
+  vertical-align: middle;
+}
+
+/* --- Inline annotations --- */
+
+.line-annotation {
+  display: inline-block;
+  margin-left: 20px;
+  font-size: 11px;
+  font-style: italic;
+  border-radius: 3px;
+  padding: 0 6px;
+}
+
+.line-annotation-error {
+  color: #e06c75;
+  background: rgba(224, 108, 117, 0.1);
+}
+
+.line-annotation-warning {
+  color: #d9a757;
+  background: rgba(217, 167, 87, 0.1);
+}
+
+.line-row.has-annotation {
+  background: rgba(224, 108, 117, 0.04);
+}
+
+/* --- Light theme for batch 6 --- */
+
+body.light-theme .bookmark-marker {
+  color: #d97757;
+}
+
+body.light-theme .line-row.bookmarked {
+  background: rgba(217, 119, 87, 0.06);
+}
+
+body.light-theme .autosave-toast {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+  color: #6a6358;
+}
+
+body.light-theme .tab-preview-tooltip {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+}
+
+body.light-theme .tab-preview-header {
+  color: #a09888;
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .tab-preview-content {
+  color: #5a5347;
+}
+
+body.light-theme .tab-changed {
+  color: #b08930;
+  background: rgba(176, 137, 48, 0.12);
+}
+
+body.light-theme .cmd-history-header {
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .cmd-history-item {
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .cmd-history-item:hover {
+  background: rgba(217, 209, 199, 0.4);
+}
+
+body.light-theme .cmd-history-text {
+  color: #3d3a36;
+}
+
+body.light-theme .cmd-history-btn {
+  border-color: #d9d1c7;
+  color: #6a6358;
+}
+
+body.light-theme .cmd-history-btn:hover {
+  border-color: #d97757;
+  color: #d97757;
+}
+
+body.light-theme .line-annotation-error {
+  color: #c0392b;
+  background: rgba(192, 57, 43, 0.08);
+}
+
+body.light-theme .line-annotation-warning {
+  color: #b08930;
+  background: rgba(176, 137, 48, 0.08);
+}
+
+body.light-theme .line-row.has-annotation {
+  background: rgba(192, 57, 43, 0.03);
+}
+
 /* --- Mobile header (hidden on desktop) --- */
 
 #mobile-header {

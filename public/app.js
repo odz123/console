@@ -130,6 +130,23 @@
   const sessionSearchInput = document.getElementById('session-search-input');
   const sessionSearchResults = document.getElementById('session-search-results');
 
+  // Bookmark button refs
+  const fvBookmarkToggle = document.getElementById('fv-bookmark-toggle');
+  const fvBookmarkPrev = document.getElementById('fv-bookmark-prev');
+  const fvBookmarkNext = document.getElementById('fv-bookmark-next');
+
+  // Tab preview tooltip ref
+  const tabPreviewTooltip = document.getElementById('tab-preview-tooltip');
+
+  // Auto-save refs
+  const autosaveToast = document.getElementById('autosave-toast');
+  const autosaveUndo = document.getElementById('autosave-undo');
+
+  // Command history panel refs
+  const cmdHistoryPanel = document.getElementById('cmd-history-panel');
+  const cmdHistoryList = document.getElementById('cmd-history-list');
+  const btnCmdHistoryClear = document.getElementById('btn-cmd-history-clear');
+
   // File tree header button refs
   const btnExpandAll = document.getElementById('btn-expand-all');
   const btnCollapseAll = document.getElementById('btn-collapse-all');
@@ -237,6 +254,23 @@
 
   // Dirty tabs tracking (unsaved edits)
   const dirtyTabs = new Set();
+
+  // Line bookmarks: Map<tabId, Set<lineNum>>
+  const bookmarks = new Map();
+
+  // Command history for panel
+  const commandHistory = [];
+
+  // Auto-save state
+  let autoSaveTimer = null;
+  let autoSaveLastContent = null;
+  const AUTO_SAVE_DELAY = 3000;
+
+  // Tab file change tracking: Map<tabId, originalContent>
+  const tabOriginalContent = new Map();
+
+  // Terminal annotation patterns (errors/warnings from terminal)
+  const termAnnotations = new Map(); // Map<filePath, [{line, type, message}]>
 
   // Attached files state for prompt bar
   let attachedFiles = [];
@@ -1004,6 +1038,8 @@
               claudePendingScroll = true;
             }
             term.write(msg.data);
+            // Parse terminal output for error/warning annotations
+            parseTermAnnotations(msg.data);
           }
           break;
 
@@ -2121,6 +2157,15 @@
           dirty.title = 'Unsaved changes';
           el.appendChild(dirty);
         }
+
+        // File change indicator (content changed since open)
+        if (tabOriginalContent.has(tab.id) && tab.content !== tabOriginalContent.get(tab.id)) {
+          const changed = document.createElement('span');
+          changed.className = 'tab-changed';
+          changed.textContent = 'M';
+          changed.title = 'File modified since opened';
+          el.appendChild(changed);
+        }
       }
 
       // Diff stats badge (only for unpinned)
@@ -2150,6 +2195,16 @@
       el.oncontextmenu = (e) => {
         e.preventDefault();
         showTabContextMenu(e, tab);
+      };
+
+      // Tab preview tooltip on hover
+      let tabHoverTimer = null;
+      el.onmouseenter = () => {
+        tabHoverTimer = setTimeout(() => showTabPreview(tab, el), 600);
+      };
+      el.onmouseleave = () => {
+        clearTimeout(tabHoverTimer);
+        hideTabPreview();
       };
 
       // Drag-and-drop reordering
@@ -2446,6 +2501,10 @@
 
     if (tab) {
       openTabs.push(tab);
+      // Track original content for change indicator
+      if (tab.content && typeof tab.content === 'string') {
+        tabOriginalContent.set(tab.id, tab.content);
+      }
       switchTab(tab.id);
       // Track in recent files
       trackRecentFile(tab.fullPath);
@@ -2733,6 +2792,12 @@
 
     // Render minimap
     renderMinimap(tab);
+
+    // Render bookmarks
+    renderBookmarkMarkers();
+
+    // Render inline annotations from terminal
+    renderAnnotations(tab);
   }
 
   // Track last-clicked line for Shift+click range selection
@@ -2912,6 +2977,8 @@
         dirtyTabs.delete(tab.id);
       }
       renderTabs(); // update dirty indicator on tab
+      // Auto-save after delay
+      scheduleAutoSave(tab, textarea);
     };
     fileViewerContent.appendChild(textarea);
     textarea.focus();
@@ -3235,17 +3302,33 @@
     if (tab === 'files') {
       fileTreeEl.classList.remove('hidden');
       gitPanel.classList.add('hidden');
+      if (cmdHistoryPanel) cmdHistoryPanel.classList.add('hidden');
       btnRefreshFileTree.style.display = '';
       btnToggleFileTree.style.display = '';
+      if (btnExpandAll) btnExpandAll.style.display = '';
+      if (btnCollapseAll) btnCollapseAll.style.display = '';
       if (searchBox) searchBox.style.display = '';
-    } else {
+    } else if (tab === 'git') {
       fileTreeEl.classList.add('hidden');
       gitPanel.classList.remove('hidden');
+      if (cmdHistoryPanel) cmdHistoryPanel.classList.add('hidden');
       btnRefreshFileTree.style.display = 'none';
       btnToggleFileTree.style.display = 'none';
+      if (btnExpandAll) btnExpandAll.style.display = 'none';
+      if (btnCollapseAll) btnCollapseAll.style.display = 'none';
       if (searchBox) searchBox.style.display = 'none';
       setGitTabBadge(false);
       refreshGitStatus();
+    } else if (tab === 'history') {
+      fileTreeEl.classList.add('hidden');
+      gitPanel.classList.add('hidden');
+      if (cmdHistoryPanel) cmdHistoryPanel.classList.remove('hidden');
+      btnRefreshFileTree.style.display = 'none';
+      btnToggleFileTree.style.display = 'none';
+      if (btnExpandAll) btnExpandAll.style.display = 'none';
+      if (btnCollapseAll) btnCollapseAll.style.display = 'none';
+      if (searchBox) searchBox.style.display = 'none';
+      renderCommandHistory();
     }
   });
 
@@ -3960,6 +4043,8 @@
     }
     promptHistoryIdx = -1;
     promptHistoryDraft = '';
+    // Track in command history panel
+    addCommandHistory(raw);
     // Send text to terminal followed by Enter
     wsSend(JSON.stringify({ type: 'input', data: text + '\r' }));
     promptInput.value = '';
@@ -4181,6 +4266,27 @@
     if ((e.ctrlKey || e.metaKey) && e.key === '0') {
       e.preventDefault();
       setTermFontSize(DEFAULT_FONT_SIZE);
+      return;
+    }
+
+    // Ctrl+Shift+M — Toggle bookmark
+    if (e.key === 'M' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+      e.preventDefault();
+      if (activeTabId !== 'claude') {
+        const firstRow = fileViewerContent.querySelector('.line-row');
+        if (firstRow) {
+          const rowHeight = firstRow.offsetHeight || 20;
+          const currentLine = Math.floor(fileViewerContent.scrollTop / rowHeight) + 1;
+          toggleBookmark(currentLine);
+        }
+      }
+      return;
+    }
+
+    // F2 / Shift+F2 — Navigate bookmarks
+    if (e.key === 'F2') {
+      e.preventDefault();
+      navigateBookmark(e.shiftKey ? -1 : 1);
       return;
     }
 
@@ -6730,6 +6836,342 @@
 
   function closeSessionSearch() {
     if (sessionSearchOverlay) sessionSearchOverlay.classList.add('hidden');
+  }
+
+  // --- Line bookmarks ---
+
+  function toggleBookmark(lineNum) {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || !lineNum) return;
+
+    if (!bookmarks.has(tab.id)) bookmarks.set(tab.id, new Set());
+    const marks = bookmarks.get(tab.id);
+
+    if (marks.has(lineNum)) {
+      marks.delete(lineNum);
+    } else {
+      marks.add(lineNum);
+    }
+
+    // Update visual markers
+    renderBookmarkMarkers();
+  }
+
+  function renderBookmarkMarkers() {
+    // Clear existing markers
+    fileViewerContent.querySelectorAll('.bookmark-marker').forEach(m => m.remove());
+    fileViewerContent.querySelectorAll('.line-row.bookmarked').forEach(r => r.classList.remove('bookmarked'));
+
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || !bookmarks.has(tab.id)) return;
+
+    const marks = bookmarks.get(tab.id);
+    marks.forEach(lineNum => {
+      const row = fileViewerContent.querySelector(`.line-row[data-line-num="${lineNum}"]`);
+      if (row) {
+        row.classList.add('bookmarked');
+        const marker = document.createElement('span');
+        marker.className = 'bookmark-marker';
+        marker.textContent = '\u2691';
+        marker.title = `Bookmark line ${lineNum}`;
+        marker.onclick = (e) => {
+          e.stopPropagation();
+          toggleBookmark(lineNum);
+        };
+        const numEl = row.querySelector('.line-num');
+        if (numEl) numEl.insertBefore(marker, numEl.firstChild);
+      }
+    });
+  }
+
+  function navigateBookmark(dir) {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || !bookmarks.has(tab.id)) return;
+
+    const marks = [...bookmarks.get(tab.id)].sort((a, b) => a - b);
+    if (marks.length === 0) return;
+
+    // Get current visible line
+    const firstRow = fileViewerContent.querySelector('.line-row');
+    if (!firstRow) return;
+    const rowHeight = firstRow.offsetHeight || 20;
+    const currentLine = Math.floor(fileViewerContent.scrollTop / rowHeight) + 1;
+
+    let target;
+    if (dir > 0) {
+      target = marks.find(m => m > currentLine) || marks[0]; // wrap around
+    } else {
+      target = [...marks].reverse().find(m => m < currentLine) || marks[marks.length - 1]; // wrap around
+    }
+    if (target) goToLine(target);
+  }
+
+  // Bookmark button handlers
+  if (fvBookmarkToggle) {
+    fvBookmarkToggle.onclick = () => {
+      const firstRow = fileViewerContent.querySelector('.line-row');
+      if (!firstRow) return;
+      const rowHeight = firstRow.offsetHeight || 20;
+      const currentLine = Math.floor(fileViewerContent.scrollTop / rowHeight) + 1;
+      toggleBookmark(currentLine);
+    };
+  }
+  if (fvBookmarkPrev) fvBookmarkPrev.onclick = () => navigateBookmark(-1);
+  if (fvBookmarkNext) fvBookmarkNext.onclick = () => navigateBookmark(1);
+
+  // --- Auto-save with undo ---
+
+  function scheduleAutoSave(tab, textarea) {
+    if (autoSaveTimer) clearTimeout(autoSaveTimer);
+    autoSaveTimer = setTimeout(async () => {
+      if (!textarea || !tab) return;
+      const newContent = textarea.value;
+      if (newContent === tab.content) return; // no changes
+
+      autoSaveLastContent = tab.content; // save for undo
+      const savedTabId = tab.id;
+
+      try {
+        const res = await fetch('/api/file', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            sessionId: activeSessionId,
+            path: tab.fullPath,
+            content: newContent,
+          }),
+        });
+
+        if (!res.ok) return; // silent fail for auto-save
+
+        tab.content = newContent;
+        dirtyTabs.delete(tab.id);
+        renderTabs();
+
+        // Show auto-save toast with undo
+        if (autosaveToast) {
+          autosaveToast.classList.remove('hidden');
+          const undoHandler = async () => {
+            if (autoSaveLastContent === null) return;
+            // Restore previous content
+            try {
+              await fetch('/api/file', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  sessionId: activeSessionId,
+                  path: tab.fullPath,
+                  content: autoSaveLastContent,
+                }),
+              });
+              tab.content = autoSaveLastContent;
+              if (textarea) textarea.value = autoSaveLastContent;
+              dirtyTabs.delete(tab.id);
+              renderTabs();
+              showToast('Undo successful', 'success', 2000);
+            } catch {
+              showToast('Undo failed', 'error');
+            }
+            autosaveToast.classList.add('hidden');
+            autoSaveLastContent = null;
+          };
+          if (autosaveUndo) {
+            autosaveUndo.onclick = undoHandler;
+          }
+          setTimeout(() => {
+            autosaveToast.classList.add('hidden');
+            autoSaveLastContent = null;
+          }, 5000);
+        }
+      } catch { /* silent fail */ }
+    }, AUTO_SAVE_DELAY);
+  }
+
+  // --- Tab preview tooltip ---
+
+  function showTabPreview(tab, anchorEl) {
+    if (!tabPreviewTooltip || !tab.content || tab.type === 'image' || tab.type === 'binary') return;
+
+    tabPreviewTooltip.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.className = 'tab-preview-header';
+    header.textContent = tab.fullPath;
+
+    const pre = document.createElement('pre');
+    pre.className = 'tab-preview-content';
+    const previewLines = (typeof tab.content === 'string' ? tab.content : '').split('\n').slice(0, 10);
+    pre.textContent = previewLines.join('\n');
+    if (tab.content.split('\n').length > 10) {
+      pre.textContent += '\n\u2026';
+    }
+
+    tabPreviewTooltip.appendChild(header);
+    tabPreviewTooltip.appendChild(pre);
+
+    const rect = anchorEl.getBoundingClientRect();
+    tabPreviewTooltip.style.top = (rect.bottom + 4) + 'px';
+    tabPreviewTooltip.style.left = rect.left + 'px';
+    tabPreviewTooltip.classList.remove('hidden');
+
+    // Clamp to viewport
+    const ttRect = tabPreviewTooltip.getBoundingClientRect();
+    if (ttRect.right > window.innerWidth) {
+      tabPreviewTooltip.style.left = Math.max(0, window.innerWidth - ttRect.width - 8) + 'px';
+    }
+    if (ttRect.bottom > window.innerHeight) {
+      tabPreviewTooltip.style.top = (rect.top - ttRect.height - 4) + 'px';
+    }
+  }
+
+  function hideTabPreview() {
+    if (tabPreviewTooltip) tabPreviewTooltip.classList.add('hidden');
+  }
+
+  // --- Command history panel ---
+
+  function addCommandHistory(text) {
+    if (!text || !text.trim()) return;
+    commandHistory.push({
+      text: text.trim(),
+      time: new Date(),
+      sessionId: activeSessionId,
+      sessionName: (sessions.find(s => s.id === activeSessionId) || {}).name || 'Unknown',
+    });
+    // Update badge on history tab
+    const histTab = document.querySelector('[data-rp-tab="history"]');
+    if (histTab && activeRightPanelTab !== 'history') {
+      histTab.dataset.badge = 'true';
+    }
+  }
+
+  function renderCommandHistory() {
+    if (!cmdHistoryList) return;
+    cmdHistoryList.innerHTML = '';
+
+    // Remove badge
+    const histTab = document.querySelector('[data-rp-tab="history"]');
+    if (histTab) delete histTab.dataset.badge;
+
+    if (commandHistory.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'cmd-history-empty';
+      empty.textContent = 'No commands sent yet';
+      cmdHistoryList.appendChild(empty);
+      return;
+    }
+
+    // Show most recent first
+    for (let i = commandHistory.length - 1; i >= 0; i--) {
+      const cmd = commandHistory[i];
+      const item = document.createElement('div');
+      item.className = 'cmd-history-item';
+
+      const time = document.createElement('span');
+      time.className = 'cmd-history-time';
+      time.textContent = cmd.time.toLocaleTimeString();
+
+      const text = document.createElement('span');
+      text.className = 'cmd-history-text';
+      text.textContent = cmd.text.length > 200 ? cmd.text.substring(0, 200) + '\u2026' : cmd.text;
+
+      const actions = document.createElement('div');
+      actions.className = 'cmd-history-actions';
+
+      const copyBtn = document.createElement('button');
+      copyBtn.className = 'cmd-history-btn';
+      copyBtn.textContent = 'Copy';
+      copyBtn.title = 'Copy to clipboard';
+      copyBtn.onclick = () => {
+        navigator.clipboard.writeText(cmd.text).catch(() => {});
+        showToast('Copied', 'info', 1500);
+      };
+
+      const resendBtn = document.createElement('button');
+      resendBtn.className = 'cmd-history-btn';
+      resendBtn.textContent = 'Resend';
+      resendBtn.title = 'Send again';
+      resendBtn.onclick = () => {
+        if (promptInput) {
+          promptInput.value = cmd.text;
+          promptInput.focus();
+        }
+      };
+
+      actions.appendChild(copyBtn);
+      actions.appendChild(resendBtn);
+      item.appendChild(time);
+      item.appendChild(text);
+      item.appendChild(actions);
+      cmdHistoryList.appendChild(item);
+    }
+  }
+
+  if (btnCmdHistoryClear) {
+    btnCmdHistoryClear.onclick = () => {
+      commandHistory.length = 0;
+      renderCommandHistory();
+    };
+  }
+
+  // --- Inline annotations from terminal output ---
+
+  const ANNOTATION_PATTERNS = [
+    // ESLint / TypeScript style: file.js:10:5: error message
+    { regex: /([^\s:]+\.[a-z]+):(\d+)(?::\d+)?:\s*(error|warning|Error|Warning)[:\s]+(.*)/g, type: null },
+    // Python style: File "file.py", line 10
+    { regex: /File "([^"]+)", line (\d+)/g, type: 'error' },
+    // Rust/Go style: --> file.rs:10:5
+    { regex: /-->\s+([^\s:]+):(\d+)/g, type: 'error' },
+  ];
+
+  function parseTermAnnotations(data) {
+    // Strip ANSI escape sequences
+    const clean = data.replace(/\x1b\[[0-9;]*[a-zA-Z]/g, '');
+
+    for (const pat of ANNOTATION_PATTERNS) {
+      pat.regex.lastIndex = 0;
+      let match;
+      while ((match = pat.regex.exec(clean)) !== null) {
+        const filePath = match[1];
+        const lineNum = parseInt(match[2], 10);
+        const type = pat.type || (match[3] && match[3].toLowerCase().includes('warn') ? 'warning' : 'error');
+        const message = match[4] || '';
+
+        if (!termAnnotations.has(filePath)) {
+          termAnnotations.set(filePath, []);
+        }
+        const existing = termAnnotations.get(filePath);
+        // Avoid duplicates
+        if (!existing.find(a => a.line === lineNum && a.message === message)) {
+          existing.push({ line: lineNum, type, message: message.trim() });
+          // Keep only last 50 annotations per file
+          if (existing.length > 50) existing.shift();
+        }
+      }
+    }
+  }
+
+  function renderAnnotations(tab) {
+    if (!tab || !tab.fullPath) return;
+
+    // Check for annotations matching this file's name
+    const fileName = tab.fullPath.split('/').pop();
+    const annotations = termAnnotations.get(fileName) || termAnnotations.get(tab.fullPath) || [];
+    if (annotations.length === 0) return;
+
+    for (const ann of annotations) {
+      const row = fileViewerContent.querySelector(`.line-row[data-line-num="${ann.line}"]`);
+      if (!row) continue;
+
+      // Add annotation inline
+      const annEl = document.createElement('span');
+      annEl.className = 'line-annotation line-annotation-' + ann.type;
+      annEl.textContent = ann.message ? `\u25CF ${ann.type}: ${ann.message}` : `\u25CF ${ann.type}`;
+      annEl.title = ann.message;
+      row.appendChild(annEl);
+      row.classList.add('has-annotation');
+    }
   }
 
   // --- Init ---
