@@ -147,6 +147,33 @@
   const cmdHistoryList = document.getElementById('cmd-history-list');
   const btnCmdHistoryClear = document.getElementById('btn-cmd-history-clear');
 
+  // Selection info status bar ref
+  const statusSelectionInfo = document.getElementById('status-selection-info');
+
+  // Zen mode button
+  const statusZen = document.getElementById('status-zen');
+
+  // Problems panel refs
+  const statusProblems = document.getElementById('status-problems');
+  const problemsPanel = document.getElementById('problems-panel');
+  const problemsList = document.getElementById('problems-list');
+  const problemsCount = document.getElementById('problems-count');
+  const problemsPanelClose = document.getElementById('problems-panel-close');
+
+  // Breadcrumb dropdown ref
+  const breadcrumbDropdown = document.getElementById('breadcrumb-dropdown');
+
+  // Split editor refs
+  const splitEditorOverlay = document.getElementById('split-editor-overlay');
+  const splitLeftContent = document.getElementById('split-left-content');
+  const splitRightContent = document.getElementById('split-right-content');
+  const splitLeftFilename = document.getElementById('split-left-filename');
+  const splitRightFilename = document.getElementById('split-right-filename');
+  const splitLeftClose = document.getElementById('split-left-close');
+  const splitRightClose = document.getElementById('split-right-close');
+  const splitEditorDivider = document.getElementById('split-editor-divider');
+  const fvSplitViewBtn = document.getElementById('fv-split-view');
+
   // File tree header button refs
   const btnExpandAll = document.getElementById('btn-expand-all');
   const btnCollapseAll = document.getElementById('btn-collapse-all');
@@ -303,6 +330,7 @@
 
   // Focus mode state
   let focusModeActive = false;
+  let zenModeActive = false;
 
   // Mini sidebar state
   let sidebarCollapsed = false;
@@ -1040,6 +1068,7 @@
             term.write(msg.data);
             // Parse terminal output for error/warning annotations
             parseTermAnnotations(msg.data);
+            updateProblemsCount();
           }
           break;
 
@@ -2316,6 +2345,7 @@
       // Hide file-specific status bar items for Claude tab
       if (statusCursorPos) statusCursorPos.classList.add('hidden');
       if (statusFileInfo) statusFileInfo.classList.add('hidden');
+      if (statusSelectionInfo) statusSelectionInfo.classList.add('hidden');
       term.focus();
       // Refit terminal synchronously so term.cols/rows are correct before
       // attachSession() sends the attach message with dimensions.
@@ -2397,6 +2427,7 @@
       { label: 'Close Others', action: () => closeOtherTabs(tab.id), disabled: openTabs.length <= 1 },
       { label: 'Close All Unpinned', action: () => closeAllTabs() },
       { type: 'separator' },
+      { label: 'Open in Split View', action: () => openSplitView(tab) },
       { label: 'Copy Path', action: () => { navigator.clipboard.writeText(tab.fullPath).catch(() => {}); showToast('Path copied', 'info', 2000); } },
     ];
 
@@ -2549,19 +2580,12 @@
       segment.className = 'fv-path-segment';
       segment.textContent = parts[i];
       if (i < parts.length - 1) {
-        // Clicking a directory segment expands it in the file tree
+        // Clicking a directory segment shows dropdown of sibling files
         const dirPath = parts.slice(0, i + 1).join('/');
         segment.classList.add('fv-path-clickable');
-        segment.onclick = () => {
-          if (!expandedDirs.has(dirPath)) {
-            expandedDirs.add(dirPath);
-            renderFileTreeDir(fileTreeEl, '', 0);
-          }
-          // Switch to files tab if on git tab
-          if (activeRightPanelTab !== 'files') {
-            const filesTab = rightPanelTabs.querySelector('[data-rp-tab="files"]');
-            if (filesTab) filesTab.click();
-          }
+        segment.onclick = (e) => {
+          e.stopPropagation();
+          showBreadcrumbDropdown(dirPath, segment);
         };
       }
       fileViewerPath.appendChild(segment);
@@ -2769,8 +2793,8 @@
           text.appendChild(guide);
         }
       }
-      const textNode = document.createTextNode(lineContent);
-      text.appendChild(textNode);
+      // Render text with clickable URLs
+      renderLineTextWithLinks(text, lineContent);
       // Double-click to highlight all matching words
       text.addEventListener('dblclick', (e) => handleWordDoubleClick(e));
       // Click for bracket matching
@@ -4269,6 +4293,13 @@
       return;
     }
 
+    // Ctrl+Shift+Z — Toggle Zen mode
+    if (e.key === 'Z' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+      e.preventDefault();
+      toggleZenMode();
+      return;
+    }
+
     // Ctrl+Shift+M — Toggle bookmark
     if (e.key === 'M' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
       e.preventDefault();
@@ -4374,6 +4405,21 @@
 
     // Esc — close overlays, stop Claude, or close terminal search
     if (e.key === 'Escape') {
+      if (zenModeActive) {
+        toggleZenMode();
+        e.stopPropagation();
+        return;
+      }
+      if (splitEditorOverlay && !splitEditorOverlay.classList.contains('hidden')) {
+        closeSplitView();
+        e.stopPropagation();
+        return;
+      }
+      if (problemsPanel && !problemsPanel.classList.contains('hidden')) {
+        problemsPanel.classList.add('hidden');
+        e.stopPropagation();
+        return;
+      }
       if (quickOpenOverlay && !quickOpenOverlay.classList.contains('hidden')) {
         closeQuickOpen();
         e.stopPropagation();
@@ -4452,6 +4498,8 @@
         { icon: '\u21BB', label: 'Refresh Git Status', meta: 'action', action: () => { closeCommandPalette(); refreshGitStatus(); } },
         { icon: '\u25A3', label: 'Toggle Sidebar', meta: 'Ctrl+B', action: () => { closeCommandPalette(); toggleMiniSidebar(); } },
         { icon: '\u25A3', label: 'Toggle Focus Mode', meta: 'Ctrl+\\', action: () => { closeCommandPalette(); toggleFocusMode(); } },
+        { icon: '\u2B1A', label: 'Toggle Zen Mode', meta: 'Ctrl+Shift+Z', action: () => { closeCommandPalette(); toggleZenMode(); } },
+        { icon: '\u26A0', label: 'Toggle Problems Panel', meta: 'errors/warnings', action: () => { closeCommandPalette(); toggleProblemsPanel(); } },
         { icon: '\u2717', label: 'Close All Tabs', meta: 'action', action: () => { closeCommandPalette(); closeAllTabs(); } },
         { icon: '\u25CB', label: 'Toggle Theme', meta: 'light/dark', action: () => { closeCommandPalette(); toggleTheme(); } },
         { icon: '\u21E9', label: 'Export Session Output', meta: 'download .txt', action: () => { closeCommandPalette(); exportSessionOutput(); } },
@@ -7173,6 +7221,380 @@
       row.classList.add('has-annotation');
     }
   }
+
+  // --- Split editor (side-by-side file view) ---
+
+  let splitLeftTab = null;
+  let splitRightTab = null;
+
+  function openSplitView(tab) {
+    if (!splitEditorOverlay || !tab) return;
+    // If no left pane, put current file there and prompt for second
+    if (!splitLeftTab) {
+      splitLeftTab = tab;
+      renderSplitPane(splitLeftContent, splitLeftFilename, tab);
+      // Right pane shows a placeholder
+      if (splitRightContent) {
+        splitRightContent.innerHTML = '<div class="split-placeholder">Open another file to compare</div>';
+        splitRightFilename.textContent = '(none)';
+      }
+    } else if (!splitRightTab) {
+      splitRightTab = tab;
+      renderSplitPane(splitRightContent, splitRightFilename, tab);
+    } else {
+      // Replace right pane
+      splitRightTab = tab;
+      renderSplitPane(splitRightContent, splitRightFilename, tab);
+    }
+    splitEditorOverlay.classList.remove('hidden');
+    fileViewer.classList.add('hidden');
+  }
+
+  function renderSplitPane(contentEl, filenameEl, tab) {
+    if (!contentEl || !tab) return;
+    filenameEl.textContent = tab.filename || tab.fullPath;
+    contentEl.innerHTML = '';
+    if (tab.type === 'markdown') {
+      contentEl.className = 'split-editor-content markdown-body';
+      const rawHtml = marked.parse(tab.content);
+      contentEl.innerHTML = DOMPurify.sanitize(rawHtml);
+    } else if (tab.content && typeof tab.content === 'string') {
+      contentEl.className = 'split-editor-content plain-text';
+      const lines = tab.content.split('\n');
+      const table = document.createElement('div');
+      table.className = 'line-table';
+      for (let i = 0; i < lines.length; i++) {
+        const row = document.createElement('div');
+        row.className = 'line-row';
+        row.dataset.lineNum = i + 1;
+        const num = document.createElement('span');
+        num.className = 'line-num';
+        num.textContent = i + 1;
+        const text = document.createElement('span');
+        text.className = 'line-text';
+        text.textContent = lines[i];
+        row.appendChild(num);
+        row.appendChild(text);
+        table.appendChild(row);
+      }
+      contentEl.appendChild(table);
+    }
+  }
+
+  function closeSplitView() {
+    if (splitEditorOverlay) splitEditorOverlay.classList.add('hidden');
+    splitLeftTab = null;
+    splitRightTab = null;
+    if (activeTabId !== 'claude') {
+      fileViewer.classList.remove('hidden');
+    }
+  }
+
+  if (splitLeftClose) splitLeftClose.onclick = () => {
+    if (splitRightTab) {
+      splitLeftTab = splitRightTab;
+      splitRightTab = null;
+      renderSplitPane(splitLeftContent, splitLeftFilename, splitLeftTab);
+      splitRightContent.innerHTML = '<div class="split-placeholder">Open another file to compare</div>';
+      splitRightFilename.textContent = '(none)';
+    } else {
+      closeSplitView();
+    }
+  };
+  if (splitRightClose) splitRightClose.onclick = () => {
+    splitRightTab = null;
+    splitRightContent.innerHTML = '<div class="split-placeholder">Open another file to compare</div>';
+    splitRightFilename.textContent = '(none)';
+  };
+
+  // Split view button in file viewer toolbar
+  if (fvSplitViewBtn) {
+    fvSplitViewBtn.onclick = () => {
+      const tab = openTabs.find(t => t.id === activeTabId);
+      if (tab) openSplitView(tab);
+    };
+  }
+
+  // Split editor divider drag
+  if (splitEditorDivider) {
+    let splitDragging = false;
+    splitEditorDivider.addEventListener('mousedown', (e) => {
+      splitDragging = true;
+      e.preventDefault();
+      document.body.style.cursor = 'col-resize';
+      document.body.style.userSelect = 'none';
+    });
+    document.addEventListener('mousemove', (e) => {
+      if (!splitDragging) return;
+      const overlay = splitEditorOverlay;
+      if (!overlay) return;
+      const rect = overlay.getBoundingClientRect();
+      const pct = ((e.clientX - rect.left) / rect.width) * 100;
+      if (pct > 20 && pct < 80) {
+        const leftPane = document.getElementById('split-editor-left');
+        const rightPane = document.getElementById('split-editor-right');
+        if (leftPane) leftPane.style.flex = `0 0 ${pct}%`;
+        if (rightPane) rightPane.style.flex = `0 0 ${100 - pct}%`;
+      }
+    });
+    document.addEventListener('mouseup', () => {
+      if (splitDragging) {
+        splitDragging = false;
+        document.body.style.cursor = '';
+        document.body.style.userSelect = '';
+      }
+    });
+  }
+
+  // --- Zen mode ---
+
+  function toggleZenMode() {
+    zenModeActive = !zenModeActive;
+    document.body.classList.toggle('zen-mode', zenModeActive);
+    // Refit terminal after layout change
+    requestAnimationFrame(() => {
+      if (fitAddon) fitAddon.fit();
+      if (shellFitAddon) shellFitAddon.fit();
+    });
+    if (zenModeActive) {
+      showToast('Zen mode — press Ctrl+Shift+Z or Esc to exit', 'info', 2000);
+    }
+  }
+
+  if (statusZen) {
+    statusZen.onclick = toggleZenMode;
+  }
+
+  // --- Breadcrumb dropdown navigation ---
+
+  async function showBreadcrumbDropdown(dirPath, anchorEl) {
+    if (!breadcrumbDropdown) return;
+
+    // Close if already showing this path
+    if (!breadcrumbDropdown.classList.contains('hidden') && breadcrumbDropdown.dataset.dirPath === dirPath) {
+      breadcrumbDropdown.classList.add('hidden');
+      return;
+    }
+
+    breadcrumbDropdown.dataset.dirPath = dirPath;
+    breadcrumbDropdown.innerHTML = '<div class="bc-dropdown-loading">Loading...</div>';
+
+    // Position below the anchor
+    const rect = anchorEl.getBoundingClientRect();
+    breadcrumbDropdown.style.top = (rect.bottom + 2) + 'px';
+    breadcrumbDropdown.style.left = rect.left + 'px';
+    breadcrumbDropdown.classList.remove('hidden');
+
+    // Fetch directory contents
+    try {
+      const res = await fetch(`/api/browse?sessionId=${activeSessionId}&path=${encodeURIComponent(dirPath)}`);
+      if (!res.ok) throw new Error('Failed');
+      const data = await res.json();
+
+      breadcrumbDropdown.innerHTML = '';
+      const items = data.entries || data;
+      if (!items || items.length === 0) {
+        breadcrumbDropdown.innerHTML = '<div class="bc-dropdown-empty">Empty directory</div>';
+        return;
+      }
+
+      // Sort: directories first, then files
+      const sorted = [...items].sort((a, b) => {
+        if (a.type === 'directory' && b.type !== 'directory') return -1;
+        if (a.type !== 'directory' && b.type === 'directory') return 1;
+        return a.name.localeCompare(b.name);
+      });
+
+      for (const entry of sorted.slice(0, 30)) {
+        const item = document.createElement('div');
+        item.className = 'bc-dropdown-item';
+        const icon = document.createElement('span');
+        icon.className = 'bc-dropdown-icon';
+        icon.textContent = entry.type === 'directory' ? '\uD83D\uDCC1' : '\uD83D\uDCC4';
+        const name = document.createElement('span');
+        name.textContent = entry.name;
+        item.appendChild(icon);
+        item.appendChild(name);
+
+        if (entry.type === 'directory') {
+          item.onclick = () => {
+            breadcrumbDropdown.classList.add('hidden');
+            const fullDir = dirPath + '/' + entry.name;
+            if (!expandedDirs.has(fullDir)) {
+              expandedDirs.add(fullDir);
+              if (!expandedDirs.has(dirPath)) expandedDirs.add(dirPath);
+              renderFileTreeDir(fileTreeEl, '', 0);
+            }
+            if (activeRightPanelTab !== 'files') {
+              const filesTab = rightPanelTabs.querySelector('[data-rp-tab="files"]');
+              if (filesTab) filesTab.click();
+            }
+          };
+        } else {
+          item.onclick = () => {
+            breadcrumbDropdown.classList.add('hidden');
+            openFileTab(dirPath + '/' + entry.name, entry.name);
+          };
+        }
+        breadcrumbDropdown.appendChild(item);
+      }
+    } catch {
+      breadcrumbDropdown.innerHTML = '<div class="bc-dropdown-empty">Error loading</div>';
+    }
+
+    // Close on click outside
+    const closeDropdown = (e) => {
+      if (!breadcrumbDropdown.contains(e.target) && e.target !== anchorEl) {
+        breadcrumbDropdown.classList.add('hidden');
+        document.removeEventListener('mousedown', closeDropdown);
+      }
+    };
+    setTimeout(() => document.addEventListener('mousedown', closeDropdown), 0);
+  }
+
+  // --- Selection info in status bar ---
+
+  document.addEventListener('selectionchange', () => {
+    if (!statusSelectionInfo) return;
+    if (activeTabId === 'claude') {
+      statusSelectionInfo.classList.add('hidden');
+      return;
+    }
+
+    const sel = window.getSelection();
+    const text = sel.toString();
+    if (!text || text.length === 0) {
+      statusSelectionInfo.classList.add('hidden');
+      return;
+    }
+
+    const chars = text.length;
+    const lines = text.split('\n').length;
+    const words = text.trim().split(/\s+/).filter(Boolean).length;
+
+    statusSelectionInfo.textContent = `Sel: ${chars} chars, ${words} words, ${lines} lines`;
+    statusSelectionInfo.classList.remove('hidden');
+  });
+
+  // --- Clickable URLs in file viewer ---
+
+  const URL_REGEX = /(https?:\/\/[^\s"'<>()]+)/g;
+
+  function renderLineTextWithLinks(textEl, lineContent) {
+    URL_REGEX.lastIndex = 0;
+    let lastIdx = 0;
+    let match;
+    let hasLinks = false;
+
+    while ((match = URL_REGEX.exec(lineContent)) !== null) {
+      hasLinks = true;
+      // Text before the URL
+      if (match.index > lastIdx) {
+        textEl.appendChild(document.createTextNode(lineContent.slice(lastIdx, match.index)));
+      }
+      // The URL as a link
+      const link = document.createElement('a');
+      link.className = 'fv-link';
+      link.href = match[1];
+      link.textContent = match[1];
+      link.target = '_blank';
+      link.rel = 'noopener noreferrer';
+      link.onclick = (e) => e.stopPropagation(); // prevent bracket matching
+      textEl.appendChild(link);
+      lastIdx = match.index + match[0].length;
+    }
+
+    if (hasLinks) {
+      if (lastIdx < lineContent.length) {
+        textEl.appendChild(document.createTextNode(lineContent.slice(lastIdx)));
+      }
+    } else {
+      textEl.appendChild(document.createTextNode(lineContent));
+    }
+  }
+
+  // --- Problems panel ---
+
+  function updateProblemsCount() {
+    let total = 0;
+    for (const [, anns] of termAnnotations) {
+      total += anns.length;
+    }
+    if (statusProblems) {
+      statusProblems.textContent = total + ' problem' + (total !== 1 ? 's' : '');
+      statusProblems.classList.toggle('has-problems', total > 0);
+    }
+    if (problemsCount) problemsCount.textContent = total;
+  }
+
+  function toggleProblemsPanel() {
+    if (!problemsPanel) return;
+    const isHidden = problemsPanel.classList.contains('hidden');
+    if (isHidden) {
+      renderProblemsPanel();
+      problemsPanel.classList.remove('hidden');
+    } else {
+      problemsPanel.classList.add('hidden');
+    }
+  }
+
+  function renderProblemsPanel() {
+    if (!problemsList) return;
+    problemsList.innerHTML = '';
+
+    let total = 0;
+    for (const [filePath, anns] of termAnnotations) {
+      if (anns.length === 0) continue;
+
+      const fileGroup = document.createElement('div');
+      fileGroup.className = 'problems-file-group';
+      const fileHeader = document.createElement('div');
+      fileHeader.className = 'problems-file-header';
+      fileHeader.textContent = filePath;
+      const badge = document.createElement('span');
+      badge.className = 'problems-file-count';
+      badge.textContent = anns.length;
+      fileHeader.appendChild(badge);
+      fileGroup.appendChild(fileHeader);
+
+      for (const ann of anns) {
+        total++;
+        const row = document.createElement('div');
+        row.className = 'problems-item problems-item-' + ann.type;
+        const icon = document.createElement('span');
+        icon.className = 'problems-icon';
+        icon.textContent = ann.type === 'error' ? '\u2717' : '\u26A0';
+        const msg = document.createElement('span');
+        msg.className = 'problems-msg';
+        msg.textContent = ann.message || ann.type;
+        const loc = document.createElement('span');
+        loc.className = 'problems-loc';
+        loc.textContent = `Line ${ann.line}`;
+        row.appendChild(icon);
+        row.appendChild(msg);
+        row.appendChild(loc);
+
+        row.onclick = () => {
+          // Try to open the file and go to line
+          const tab = openTabs.find(t => t.fullPath && t.fullPath.endsWith(filePath));
+          if (tab) {
+            switchTab(tab.id);
+            setTimeout(() => goToLine(ann.line), 100);
+          }
+        };
+        fileGroup.appendChild(row);
+      }
+      problemsList.appendChild(fileGroup);
+    }
+
+    if (total === 0) {
+      problemsList.innerHTML = '<div class="problems-empty">No problems detected</div>';
+    }
+    if (problemsCount) problemsCount.textContent = total;
+  }
+
+  if (statusProblems) statusProblems.onclick = toggleProblemsPanel;
+  if (problemsPanelClose) problemsPanelClose.onclick = () => problemsPanel.classList.add('hidden');
 
   // --- Init ---
   initTerminal();

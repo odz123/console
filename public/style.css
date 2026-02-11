@@ -4613,6 +4613,385 @@ body.light-theme .line-row.has-annotation {
   background: rgba(192, 57, 43, 0.03);
 }
 
+/* --- Split editor (side-by-side) --- */
+
+.split-editor-overlay {
+  position: fixed;
+  inset: var(--tab-bar-height, 36px) 0 24px 0;
+  z-index: 100;
+  display: flex;
+  background: #2b2a27;
+}
+
+.split-editor-overlay.hidden {
+  display: none;
+}
+
+.split-editor-pane {
+  flex: 0 0 50%;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.split-editor-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 12px;
+  background: #343230;
+  border-bottom: 1px solid #3d3a36;
+  font-size: 12px;
+}
+
+.split-filename {
+  color: #c4956a;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.split-close-btn {
+  background: none;
+  border: none;
+  color: #8c8478;
+  cursor: pointer;
+  font-size: 16px;
+  padding: 0 4px;
+}
+
+.split-close-btn:hover {
+  color: #d97757;
+}
+
+.split-editor-content {
+  flex: 1;
+  overflow: auto;
+  padding: 8px 12px;
+  font-family: monospace;
+  font-size: 13px;
+  color: #e8dfd5;
+}
+
+.split-editor-divider {
+  width: 4px;
+  background: #3d3a36;
+  cursor: col-resize;
+  flex-shrink: 0;
+}
+
+.split-editor-divider:hover {
+  background: #d97757;
+}
+
+.split-placeholder {
+  color: #8c8478;
+  text-align: center;
+  padding: 40px 20px;
+  font-style: italic;
+}
+
+/* --- Zen mode --- */
+
+body.zen-mode #sidebar,
+body.zen-mode #sidebar-divider,
+body.zen-mode #right-panel,
+body.zen-mode #tab-bar,
+body.zen-mode #breadcrumb-bar,
+body.zen-mode #status-bar,
+body.zen-mode #prompt-bar {
+  display: none !important;
+}
+
+body.zen-mode #terminal-wrapper,
+body.zen-mode #file-viewer {
+  inset: 0 !important;
+}
+
+body.zen-mode .split-editor-overlay {
+  inset: 0 0 0 0;
+}
+
+/* --- Breadcrumb dropdown --- */
+
+.breadcrumb-dropdown {
+  position: fixed;
+  z-index: 2500;
+  background: #343230;
+  border: 1px solid #3d3a36;
+  border-radius: 6px;
+  min-width: 180px;
+  max-width: 320px;
+  max-height: 300px;
+  overflow-y: auto;
+  box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+}
+
+.breadcrumb-dropdown.hidden {
+  display: none;
+}
+
+.bc-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  cursor: pointer;
+  font-size: 13px;
+  color: #c5bdb3;
+}
+
+.bc-dropdown-item:hover {
+  background: rgba(217, 119, 87, 0.12);
+  color: #f0ebe3;
+}
+
+.bc-dropdown-icon {
+  font-size: 14px;
+  flex-shrink: 0;
+}
+
+.bc-dropdown-loading,
+.bc-dropdown-empty {
+  padding: 12px;
+  color: #8c8478;
+  font-size: 13px;
+  text-align: center;
+}
+
+/* --- Selection info status bar --- */
+
+.status-selection-info {
+  color: #d9a757;
+  font-size: 12px;
+}
+
+/* --- Clickable URLs in file viewer --- */
+
+.fv-link {
+  color: #57b5d9;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  cursor: pointer;
+}
+
+.fv-link:hover {
+  color: #7dc8e8;
+  text-decoration-style: solid;
+}
+
+/* --- Problems panel --- */
+
+.problems-panel {
+  position: fixed;
+  bottom: 24px;
+  left: 0;
+  right: 0;
+  max-height: 250px;
+  background: #2b2a27;
+  border-top: 2px solid #d97757;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.problems-panel.hidden {
+  display: none;
+}
+
+.problems-panel-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  background: #343230;
+  border-bottom: 1px solid #3d3a36;
+  flex-shrink: 0;
+}
+
+.problems-panel-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #c5bdb3;
+}
+
+.problems-count {
+  font-size: 11px;
+  color: #d97757;
+  background: rgba(217, 119, 87, 0.15);
+  border-radius: 8px;
+  padding: 1px 8px;
+}
+
+.problems-panel-close {
+  margin-left: auto;
+  background: none;
+  border: none;
+  color: #8c8478;
+  cursor: pointer;
+  font-size: 16px;
+}
+
+.problems-panel-close:hover {
+  color: #d97757;
+}
+
+.problems-list {
+  overflow-y: auto;
+  flex: 1;
+}
+
+.problems-file-group {
+  border-bottom: 1px solid #3d3a36;
+}
+
+.problems-file-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px;
+  background: rgba(61, 58, 54, 0.5);
+  font-size: 12px;
+  font-weight: 600;
+  color: #c5bdb3;
+}
+
+.problems-file-count {
+  font-size: 10px;
+  color: #d97757;
+  background: rgba(217, 119, 87, 0.15);
+  border-radius: 8px;
+  padding: 0 6px;
+}
+
+.problems-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 12px 4px 24px;
+  cursor: pointer;
+  font-size: 12px;
+}
+
+.problems-item:hover {
+  background: rgba(61, 58, 54, 0.5);
+}
+
+.problems-icon {
+  flex-shrink: 0;
+  font-size: 12px;
+}
+
+.problems-item-error .problems-icon {
+  color: #e06c75;
+}
+
+.problems-item-warning .problems-icon {
+  color: #d9a757;
+}
+
+.problems-msg {
+  color: #c5bdb3;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.problems-loc {
+  color: #8c8478;
+  flex-shrink: 0;
+  font-size: 11px;
+}
+
+.problems-empty {
+  padding: 20px;
+  text-align: center;
+  color: #8c8478;
+  font-size: 13px;
+}
+
+.status-problems-btn.has-problems {
+  color: #d97757;
+}
+
+/* --- Light theme for batch 7 --- */
+
+body.light-theme .split-editor-overlay {
+  background: #f5f2ee;
+}
+
+body.light-theme .split-editor-header {
+  background: #eae6e0;
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .split-editor-divider {
+  background: #d9d1c7;
+}
+
+body.light-theme .split-editor-divider:hover {
+  background: #d97757;
+}
+
+body.light-theme .split-editor-content {
+  color: #3d3a36;
+}
+
+body.light-theme .breadcrumb-dropdown {
+  background: #f5f2ee;
+  border-color: #d9d1c7;
+}
+
+body.light-theme .bc-dropdown-item {
+  color: #5a5347;
+}
+
+body.light-theme .bc-dropdown-item:hover {
+  background: rgba(217, 119, 87, 0.08);
+  color: #3d3a36;
+}
+
+body.light-theme .status-selection-info {
+  color: #b08930;
+}
+
+body.light-theme .fv-link {
+  color: #2980b9;
+}
+
+body.light-theme .fv-link:hover {
+  color: #1a6da0;
+}
+
+body.light-theme .problems-panel {
+  background: #f5f2ee;
+  border-top-color: #d97757;
+}
+
+body.light-theme .problems-panel-header {
+  background: #eae6e0;
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .problems-file-group {
+  border-bottom-color: #d9d1c7;
+}
+
+body.light-theme .problems-file-header {
+  background: rgba(217, 209, 199, 0.4);
+  color: #5a5347;
+}
+
+body.light-theme .problems-item:hover {
+  background: rgba(217, 209, 199, 0.4);
+}
+
+body.light-theme .problems-msg {
+  color: #5a5347;
+}
+
 /* --- Mobile header (hidden on desktop) --- */
 
 #mobile-header {

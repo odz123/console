@@ -56,6 +56,7 @@
             <button id="fv-bookmark-next" class="fv-btn" title="Next bookmark (F2)">&#8595;&#9873;</button>
             <button id="file-viewer-wrap" class="fv-btn" title="Toggle word wrap">Wrap</button>
             <button id="file-viewer-copy" class="fv-btn" title="Copy file content">Copy</button>
+            <button id="fv-split-view" class="fv-btn" title="Open in split view">Split View</button>
             <button id="file-viewer-refresh" title="Refresh">Refresh</button>
           </div>
         </div>
@@ -107,6 +108,7 @@
           <span class="status-sep">|</span>
           <span id="status-font-size" class="status-item status-font-size" title="Font size (Ctrl+/-)"></span>
           <span id="status-cursor-pos" class="status-item status-cursor-pos hidden" title="Cursor position"></span>
+          <span id="status-selection-info" class="status-item status-selection-info hidden" title="Selection info"></span>
           <span id="status-file-info" class="status-item status-file-info hidden" title="File info"></span>
           <span id="status-changes" class="status-item status-changes hidden" title="Changed files — click to open git panel"></span>
         </div>
@@ -116,6 +118,8 @@
           <span id="status-connection" class="status-item"></span>
           <span class="status-sep status-sep-controls">|</span>
           <button id="status-notify" class="status-btn" title="Toggle browser notifications">Notify</button>
+          <button id="status-zen" class="status-btn" title="Zen mode — hide all UI except editor (Ctrl+Shift+Z)">Zen</button>
+          <button id="status-problems" class="status-btn status-problems-btn" title="Toggle problems panel">0 problems</button>
           <button id="status-theme" class="status-btn" title="Toggle light/dark theme">Theme</button>
           <button id="status-export" class="status-btn" title="Export session output (click for .txt, right-click for .md)">Export</button>
           <button id="status-interrupt" class="status-btn" title="Send interrupt (Ctrl+C)">Interrupt</button>
@@ -237,6 +241,38 @@
     </div>
   </div>
 
+  <!-- Breadcrumb dropdown -->
+  <div id="breadcrumb-dropdown" class="breadcrumb-dropdown hidden"></div>
+
+  <!-- Problems panel -->
+  <div id="problems-panel" class="problems-panel hidden">
+    <div class="problems-panel-header">
+      <span class="problems-panel-title">Problems</span>
+      <span id="problems-count" class="problems-count">0</span>
+      <button id="problems-panel-close" class="problems-panel-close">&times;</button>
+    </div>
+    <div id="problems-list" class="problems-list"></div>
+  </div>
+
+  <!-- Split editor container -->
+  <div id="split-editor-overlay" class="split-editor-overlay hidden">
+    <div id="split-editor-left" class="split-editor-pane">
+      <div class="split-editor-header">
+        <span id="split-left-filename" class="split-filename"></span>
+        <button id="split-left-close" class="split-close-btn">&times;</button>
+      </div>
+      <div id="split-left-content" class="split-editor-content"></div>
+    </div>
+    <div id="split-editor-divider" class="split-editor-divider"></div>
+    <div id="split-editor-right" class="split-editor-pane">
+      <div class="split-editor-header">
+        <span id="split-right-filename" class="split-filename"></span>
+        <button id="split-right-close" class="split-close-btn">&times;</button>
+      </div>
+      <div id="split-right-content" class="split-editor-content"></div>
+    </div>
+  </div>
+
   <!-- Tab preview tooltip -->
   <div id="tab-preview-tooltip" class="tab-preview-tooltip hidden"></div>
 
@@ -309,6 +345,7 @@
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>G</kbd><span>Go to line</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>B</kbd><span>Toggle sidebar</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>\</kbd><span>Focus mode</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>Z</kbd><span>Zen mode</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>=</kbd>/<kbd>-</kbd><span>Zoom in / out</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>0</kbd><span>Reset zoom</span></div>
           <div class="shortcut-row"><kbd>?</kbd><span>Show shortcuts</span></div>
