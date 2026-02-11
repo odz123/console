@@ -104,6 +104,15 @@
   // File preview tooltip ref
   const filePreviewTooltip = document.getElementById('file-preview-tooltip');
 
+  // Status bar cursor/file info refs
+  const statusCursorPos = document.getElementById('status-cursor-pos');
+  const statusFileInfo = document.getElementById('status-file-info');
+
+  // Go to Symbol refs
+  const symbolOverlay = document.getElementById('symbol-overlay');
+  const symbolInput = document.getElementById('symbol-input');
+  const symbolResults = document.getElementById('symbol-results');
+
   // File tree header button refs
   const btnExpandAll = document.getElementById('btn-expand-all');
   const btnCollapseAll = document.getElementById('btn-collapse-all');
@@ -2232,6 +2241,9 @@
       }
       termWrapper.style.inset = `${getTopInset()} 0 ${getBottomInset()} 0`;
       updateScrollToBottomBtn();
+      // Hide file-specific status bar items for Claude tab
+      if (statusCursorPos) statusCursorPos.classList.add('hidden');
+      if (statusFileInfo) statusFileInfo.classList.add('hidden');
       term.focus();
       // Refit terminal synchronously so term.cols/rows are correct before
       // attachSession() sends the attach message with dimensions.
@@ -2250,7 +2262,10 @@
       const tab = openTabs.find(t => t.id === tabId);
       if (tab) {
         renderFileContent(tab);
+        updateFileInfo(tab);
       }
+      // Show cursor pos for file tabs
+      if (statusCursorPos) statusCursorPos.classList.remove('hidden');
     }
   }
 
@@ -2634,22 +2649,135 @@
       const num = document.createElement('span');
       num.className = 'line-num';
       num.textContent = i + 1;
-      num.onclick = () => highlightLine(row);
+      num.onclick = (e) => handleLineClick(row, i + 1, e);
       const text = document.createElement('span');
       text.className = 'line-text';
-      text.textContent = lines[i];
+      // Add indent guides
+      const lineContent = lines[i];
+      const indentMatch = lineContent.match(/^(\s+)/);
+      if (indentMatch) {
+        const indentStr = indentMatch[1];
+        const tabSize = 2;
+        const indentLen = indentStr.replace(/\t/g, ' '.repeat(tabSize)).length;
+        const guideCount = Math.floor(indentLen / tabSize);
+        for (let g = 0; g < guideCount; g++) {
+          const guide = document.createElement('span');
+          guide.className = 'indent-guide';
+          guide.style.left = (g * tabSize * 0.6) + 'em';
+          text.appendChild(guide);
+        }
+      }
+      const textNode = document.createTextNode(lineContent);
+      text.appendChild(textNode);
+      // Double-click to highlight all matching words
+      text.addEventListener('dblclick', (e) => handleWordDoubleClick(e));
       row.appendChild(num);
       row.appendChild(text);
       table.appendChild(row);
     }
     fileViewerContent.appendChild(table);
+
+    // Update cursor position on scroll
+    fileViewerContent.addEventListener('scroll', () => {
+      updateCursorPosition();
+    });
+    // Initial cursor position
+    updateCursorPosition();
+  }
+
+  // Track last-clicked line for Shift+click range selection
+  let lastClickedLine = null;
+
+  function handleLineClick(rowEl, lineNum, e) {
+    if (e.shiftKey && lastClickedLine !== null) {
+      // Range selection
+      const start = Math.min(lastClickedLine, lineNum);
+      const end = Math.max(lastClickedLine, lineNum);
+      selectLineRange(start, end);
+    } else {
+      highlightLine(rowEl);
+      lastClickedLine = lineNum;
+    }
+    updateCursorPosition(lineNum);
   }
 
   function highlightLine(rowEl) {
-    // Clear previous highlight
-    const prev = fileViewerContent.querySelector('.line-row.line-highlighted');
-    if (prev) prev.classList.remove('line-highlighted');
+    // Clear previous highlights
+    clearLineHighlights();
     rowEl.classList.add('line-highlighted');
+  }
+
+  function clearLineHighlights() {
+    const prev = fileViewerContent.querySelectorAll('.line-row.line-highlighted, .line-row.line-range-selected');
+    prev.forEach(el => { el.classList.remove('line-highlighted'); el.classList.remove('line-range-selected'); });
+  }
+
+  function selectLineRange(start, end) {
+    clearLineHighlights();
+    const rows = fileViewerContent.querySelectorAll('.line-row');
+    const selectedTexts = [];
+    rows.forEach(row => {
+      const ln = parseInt(row.dataset.lineNum, 10);
+      if (ln >= start && ln <= end) {
+        row.classList.add('line-range-selected');
+        const textEl = row.querySelector('.line-text');
+        if (textEl) selectedTexts.push(textEl.textContent);
+      }
+    });
+    // Copy selected range to clipboard
+    if (selectedTexts.length > 0) {
+      navigator.clipboard.writeText(selectedTexts.join('\n')).then(
+        () => showToast(`Copied lines ${start}-${end}`, 'info', 2000),
+        () => {}
+      );
+    }
+  }
+
+  function handleWordDoubleClick(e) {
+    const sel = window.getSelection();
+    const word = sel.toString().trim();
+    if (!word || word.length < 2) return;
+    // Clear previous word highlights
+    clearWordHighlights();
+    // Highlight all occurrences of this word in the file viewer
+    const lineTexts = fileViewerContent.querySelectorAll('.line-text');
+    let count = 0;
+    lineTexts.forEach(textEl => {
+      const content = textEl.textContent;
+      if (content.includes(word)) {
+        // Rebuild the text node with highlights
+        const frag = document.createDocumentFragment();
+        // Preserve indent guides
+        const guides = textEl.querySelectorAll('.indent-guide');
+        guides.forEach(g => frag.appendChild(g.cloneNode(true)));
+        // Split and highlight
+        const parts = content.split(word);
+        for (let i = 0; i < parts.length; i++) {
+          if (i > 0) {
+            const mark = document.createElement('span');
+            mark.className = 'word-highlight';
+            mark.textContent = word;
+            frag.appendChild(mark);
+            count++;
+          }
+          if (parts[i]) frag.appendChild(document.createTextNode(parts[i]));
+        }
+        textEl.innerHTML = '';
+        textEl.appendChild(frag);
+      }
+    });
+    if (count > 0) {
+      showToast(`${count} occurrences highlighted`, 'info', 2000);
+    }
+  }
+
+  function clearWordHighlights() {
+    const marks = fileViewerContent.querySelectorAll('.word-highlight');
+    marks.forEach(mark => {
+      const parent = mark.parentNode;
+      mark.replaceWith(document.createTextNode(mark.textContent));
+      parent.normalize();
+    });
   }
 
   function goToLine(lineNum) {
@@ -3736,6 +3864,10 @@
 
   if (statusExport) {
     statusExport.onclick = exportSessionOutput;
+    statusExport.oncontextmenu = (e) => {
+      e.preventDefault();
+      exportSessionMarkdown();
+    };
   }
 
   // --- Prompt input bar ---
@@ -3999,6 +4131,17 @@
     if ((e.ctrlKey || e.metaKey) && e.key === '0') {
       e.preventDefault();
       setTermFontSize(DEFAULT_FONT_SIZE);
+      return;
+    }
+
+    // Ctrl+Shift+O — Go to Symbol
+    if (e.key === 'O' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+      e.preventDefault();
+      if (symbolOverlay && symbolOverlay.classList.contains('hidden')) {
+        openGoToSymbol();
+      } else {
+        closeGoToSymbol();
+      }
       return;
     }
 
@@ -5801,6 +5944,246 @@
 
   function hideFilePreview() {
     if (filePreviewTooltip) filePreviewTooltip.classList.add('hidden');
+  }
+
+  // --- Cursor position & file info in status bar ---
+
+  function updateCursorPosition(lineNum) {
+    if (!statusCursorPos) return;
+    if (!lineNum) {
+      // Estimate from scroll position
+      const firstVisible = fileViewerContent.querySelector('.line-row');
+      if (!firstVisible) return;
+      const scrollTop = fileViewerContent.scrollTop;
+      const rowHeight = firstVisible.offsetHeight || 20;
+      lineNum = Math.floor(scrollTop / rowHeight) + 1;
+    }
+    statusCursorPos.textContent = `Ln ${lineNum}`;
+    statusCursorPos.classList.remove('hidden');
+  }
+
+  function updateFileInfo(tab) {
+    if (!statusFileInfo) return;
+    if (!tab || !tab.content) {
+      statusFileInfo.classList.add('hidden');
+      return;
+    }
+    const lines = tab.content.split('\n').length;
+    const bytes = new Blob([tab.content]).size;
+    let sizeStr;
+    if (bytes < 1024) sizeStr = bytes + ' B';
+    else if (bytes < 1024 * 1024) sizeStr = (bytes / 1024).toFixed(1) + ' KB';
+    else sizeStr = (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+
+    const ext = tab.filename.split('.').pop().toUpperCase();
+    statusFileInfo.textContent = `${lines} lines \u00B7 ${sizeStr} \u00B7 ${ext}`;
+    statusFileInfo.classList.remove('hidden');
+  }
+
+  // --- Enhanced session export as Markdown ---
+
+  function exportSessionMarkdown() {
+    if (!term || !activeSessionId) return;
+    const session = sessions.find(s => s.id === activeSessionId);
+    const name = session ? session.name : 'session';
+    const project = session ? projects.find(p => p.id === session.projectId) : null;
+
+    // Extract text from terminal buffer
+    const buf = term.buffer.active;
+    const lines = [];
+    for (let i = 0; i <= buf.length - 1; i++) {
+      const line = buf.getLine(i);
+      if (line) lines.push(line.translateToString(true));
+    }
+    while (lines.length > 0 && lines[lines.length - 1].trim() === '') lines.pop();
+
+    // Parse terminal output into sections
+    const sections = [];
+    let currentSection = { type: 'output', lines: [] };
+
+    for (const line of lines) {
+      // Detect user prompts (lines starting with > or $)
+      if (/^[\$>]\s/.test(line.trim())) {
+        if (currentSection.lines.length > 0) {
+          sections.push(currentSection);
+        }
+        currentSection = { type: 'prompt', lines: [line] };
+      } else {
+        if (currentSection.type === 'prompt' && currentSection.lines.length > 0) {
+          sections.push(currentSection);
+          currentSection = { type: 'output', lines: [] };
+        }
+        currentSection.lines.push(line);
+      }
+    }
+    if (currentSection.lines.length > 0) sections.push(currentSection);
+
+    // Build Markdown
+    let md = `# Session: ${name}\n\n`;
+    md += `- **Project:** ${project ? project.name : 'Unknown'}\n`;
+    md += `- **Date:** ${new Date().toISOString().split('T')[0]}\n`;
+    md += `- **Session ID:** ${activeSessionId}\n`;
+    if (session && session.createdAt) {
+      md += `- **Created:** ${new Date(session.createdAt).toLocaleString()}\n`;
+    }
+    md += '\n---\n\n';
+
+    for (const section of sections) {
+      if (section.type === 'prompt') {
+        md += '**User:**\n\n';
+        md += '```\n' + section.lines.join('\n') + '\n```\n\n';
+      } else {
+        const text = section.lines.join('\n').trim();
+        if (text) {
+          md += text + '\n\n';
+        }
+      }
+    }
+
+    const blob = new Blob([md], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${name.replace(/[^a-zA-Z0-9_-]/g, '_')}_session.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+    showToast('Session exported as Markdown', 'success', 2000);
+  }
+
+  // --- Go to Symbol (Ctrl+Shift+O) ---
+
+  const SYMBOL_PATTERNS = [
+    { regex: /^\s*(?:export\s+)?(?:async\s+)?function\s+(\w+)/,  kind: 'function' },
+    { regex: /^\s*(?:export\s+)?class\s+(\w+)/,                   kind: 'class' },
+    { regex: /^\s*(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?\(/, kind: 'function' },
+    { regex: /^\s*(?:const|let|var)\s+(\w+)\s*=\s*(?:async\s+)?function/, kind: 'function' },
+    { regex: /^\s*(?:export\s+)?interface\s+(\w+)/,                kind: 'interface' },
+    { regex: /^\s*(?:export\s+)?type\s+(\w+)/,                    kind: 'type' },
+    { regex: /^\s*(?:export\s+)?enum\s+(\w+)/,                    kind: 'enum' },
+    { regex: /^\s*def\s+(\w+)\s*\(/,                              kind: 'function' },
+    { regex: /^\s*class\s+(\w+)[:(]/,                             kind: 'class' },
+    { regex: /^\s*(?:pub\s+)?(?:async\s+)?fn\s+(\w+)/,            kind: 'function' },
+    { regex: /^\s*(?:pub\s+)?struct\s+(\w+)/,                     kind: 'struct' },
+    { regex: /^\s*func\s+(\w+)/,                                  kind: 'function' },
+    { regex: /^\s*(?:public|private|protected)?\s*(?:static\s+)?(?:\w+\s+)+(\w+)\s*\(/,  kind: 'method' },
+  ];
+
+  function parseSymbols(content) {
+    const lines = content.split('\n');
+    const symbols = [];
+    for (let i = 0; i < lines.length; i++) {
+      for (const pat of SYMBOL_PATTERNS) {
+        const m = lines[i].match(pat.regex);
+        if (m) {
+          symbols.push({ name: m[1], kind: pat.kind, line: i + 1, text: lines[i].trim() });
+          break;
+        }
+      }
+    }
+    return symbols;
+  }
+
+  const SYMBOL_ICONS = {
+    'function': '\u0192',
+    'class': '\u25C6',
+    'interface': '\u25CB',
+    'type': 'T',
+    'enum': 'E',
+    'struct': 'S',
+    'method': 'M',
+  };
+
+  function openGoToSymbol() {
+    const tab = openTabs.find(t => t.id === activeTabId);
+    if (!tab || !tab.content || tab.type !== 'text') return;
+
+    const symbols = parseSymbols(tab.content);
+    if (symbols.length === 0) {
+      showToast('No symbols found in file', 'info', 2000);
+      return;
+    }
+
+    symbolOverlay.classList.remove('hidden');
+    symbolInput.value = '';
+    symbolInput.focus();
+    renderSymbolResults(symbols, '');
+
+    symbolInput.oninput = () => {
+      renderSymbolResults(symbols, symbolInput.value);
+    };
+
+    symbolInput.onkeydown = (e) => {
+      if (e.key === 'Escape') {
+        closeGoToSymbol();
+        return;
+      }
+      if (e.key === 'ArrowDown') {
+        e.preventDefault();
+        moveSymbolSelection(1);
+        return;
+      }
+      if (e.key === 'ArrowUp') {
+        e.preventDefault();
+        moveSymbolSelection(-1);
+        return;
+      }
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        const active = symbolResults.querySelector('.quick-open-item.active');
+        if (active) active.click();
+        return;
+      }
+    };
+
+    symbolOverlay.onclick = (e) => {
+      if (e.target === symbolOverlay) closeGoToSymbol();
+    };
+  }
+
+  let symbolSelectedIdx = 0;
+
+  function renderSymbolResults(symbols, filter) {
+    symbolResults.innerHTML = '';
+    symbolSelectedIdx = 0;
+    const q = filter.toLowerCase();
+    const filtered = q ? symbols.filter(s => s.name.toLowerCase().includes(q)) : symbols;
+
+    filtered.slice(0, 50).forEach((sym, idx) => {
+      const item = document.createElement('div');
+      item.className = 'quick-open-item' + (idx === 0 ? ' active' : '');
+      const icon = document.createElement('span');
+      icon.className = 'symbol-icon symbol-kind-' + sym.kind;
+      icon.textContent = SYMBOL_ICONS[sym.kind] || '?';
+      const nameEl = document.createElement('span');
+      nameEl.className = 'quick-open-name';
+      nameEl.textContent = sym.name;
+      const kindEl = document.createElement('span');
+      kindEl.className = 'quick-open-path';
+      kindEl.textContent = `${sym.kind} : ${sym.line}`;
+      item.appendChild(icon);
+      item.appendChild(nameEl);
+      item.appendChild(kindEl);
+      item.onclick = () => {
+        closeGoToSymbol();
+        goToLine(sym.line);
+      };
+      symbolResults.appendChild(item);
+    });
+  }
+
+  function moveSymbolSelection(dir) {
+    const items = symbolResults.querySelectorAll('.quick-open-item');
+    if (items.length === 0) return;
+    items[symbolSelectedIdx]?.classList.remove('active');
+    symbolSelectedIdx = Math.max(0, Math.min(items.length - 1, symbolSelectedIdx + dir));
+    items[symbolSelectedIdx]?.classList.add('active');
+    items[symbolSelectedIdx]?.scrollIntoView({ block: 'nearest' });
+  }
+
+  function closeGoToSymbol() {
+    if (symbolOverlay) symbolOverlay.classList.add('hidden');
   }
 
   // --- Init ---

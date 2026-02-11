@@ -3981,6 +3981,123 @@ body.light-theme .fv-replace-row input {
   color: #3d3a36;
 }
 
+/* --- Cursor position & file info in status bar --- */
+
+.status-cursor-pos,
+.status-file-info {
+  font-size: 11px;
+  color: #8c8478;
+  padding: 0 6px;
+}
+
+.status-cursor-pos::before {
+  content: '|';
+  margin-right: 8px;
+  opacity: 0.4;
+}
+
+.status-file-info::before {
+  content: '|';
+  margin-right: 8px;
+  opacity: 0.4;
+}
+
+/* --- Line range selection --- */
+
+.line-row.line-range-selected {
+  background: rgba(217, 119, 87, 0.15) !important;
+}
+
+.line-row.line-range-selected .line-num {
+  color: #d97757;
+}
+
+/* --- Word highlight on double-click --- */
+
+.word-highlight {
+  background: rgba(217, 119, 87, 0.3);
+  border-radius: 2px;
+  padding: 0 1px;
+}
+
+/* --- Indent guides --- */
+
+.line-text {
+  position: relative;
+}
+
+.indent-guide {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: #3d3a36;
+  opacity: 0.3;
+  pointer-events: none;
+}
+
+/* --- Symbol icon in Go to Symbol --- */
+
+.symbol-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  margin-right: 8px;
+  font-size: 12px;
+  font-weight: bold;
+  border-radius: 3px;
+  flex-shrink: 0;
+}
+
+.symbol-kind-function {
+  color: #d9a757;
+  background: rgba(217, 167, 87, 0.15);
+}
+
+.symbol-kind-class {
+  color: #d97757;
+  background: rgba(217, 119, 87, 0.15);
+}
+
+.symbol-kind-interface,
+.symbol-kind-type {
+  color: #57b5d9;
+  background: rgba(87, 181, 217, 0.15);
+}
+
+.symbol-kind-enum,
+.symbol-kind-struct {
+  color: #7dd957;
+  background: rgba(125, 217, 87, 0.15);
+}
+
+.symbol-kind-method {
+  color: #c09ffc;
+  background: rgba(192, 159, 252, 0.15);
+}
+
+/* --- Light theme for new features --- */
+
+body.light-theme .status-cursor-pos,
+body.light-theme .status-file-info {
+  color: #6a6358;
+}
+
+body.light-theme .line-row.line-range-selected {
+  background: rgba(217, 119, 87, 0.12) !important;
+}
+
+body.light-theme .word-highlight {
+  background: rgba(217, 119, 87, 0.25);
+}
+
+body.light-theme .indent-guide {
+  background: #d9d1c7;
+  opacity: 0.5;
+}
+
 /* --- Mobile header (hidden on desktop) --- */
 
 #mobile-header {

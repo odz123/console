@@ -99,6 +99,8 @@
           <span id="status-duration" class="status-item"></span>
           <span class="status-sep">|</span>
           <span id="status-font-size" class="status-item status-font-size" title="Font size (Ctrl+/-)"></span>
+          <span id="status-cursor-pos" class="status-item status-cursor-pos hidden" title="Cursor position"></span>
+          <span id="status-file-info" class="status-item status-file-info hidden" title="File info"></span>
           <span id="status-changes" class="status-item status-changes hidden" title="Changed files — click to open git panel"></span>
         </div>
         <div class="status-bar-right">
@@ -108,7 +110,7 @@
           <span class="status-sep status-sep-controls">|</span>
           <button id="status-notify" class="status-btn" title="Toggle browser notifications">Notify</button>
           <button id="status-theme" class="status-btn" title="Toggle light/dark theme">Theme</button>
-          <button id="status-export" class="status-btn" title="Export session output">Export</button>
+          <button id="status-export" class="status-btn" title="Export session output (click for .txt, right-click for .md)">Export</button>
           <button id="status-interrupt" class="status-btn" title="Send interrupt (Ctrl+C)">Interrupt</button>
           <button id="status-compact" class="status-btn" title="Send /compact to reduce context">Compact</button>
           <button id="status-restart" class="status-btn status-btn-restart hidden" title="Restart session">Restart</button>
@@ -204,6 +206,14 @@
     </div>
   </div>
 
+  <!-- Go to Symbol (Ctrl+Shift+O) -->
+  <div id="symbol-overlay" class="quick-open-overlay hidden">
+    <div class="quick-open-panel">
+      <input id="symbol-input" type="text" placeholder="Go to symbol..." autocomplete="off">
+      <div id="symbol-results" class="quick-open-results"></div>
+    </div>
+  </div>
+
   <!-- Quick file open (Ctrl+P) -->
   <div id="quick-open-overlay" class="quick-open-overlay hidden">
     <div class="quick-open-panel">
@@ -257,6 +267,7 @@
           <h3>Navigation</h3>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>K</kbd><span>Command palette</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>P</kbd><span>Quick open file</span></div>
+          <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>O</kbd><span>Go to symbol</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>Tab</kbd><span>Cycle tabs</span></div>
           <div class="shortcut-row"><kbd>Alt</kbd>+<kbd>W</kbd><span>Close tab</span></div>
           <div class="shortcut-row"><kbd>Ctrl</kbd>+<kbd>F</kbd><span>Find (and replace) in file</span></div>
