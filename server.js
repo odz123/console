@@ -1847,11 +1847,28 @@ export function createServer({ testMode = false } = {}) {
           };
           manager.onData(sessionId, dataListener);
 
-          // Replay buffer in a single message to reduce write-queue churn
-          const buffer = manager.getBuffer(sessionId);
-          if (buffer.length > 0) {
-            const combined = buffer.join('');
-            safeSend(ws, JSON.stringify({ type: 'output', sessionId, data: combined }));
+          // Replay buffer — for Codex TUI sessions that are still alive,
+          // skip the historical buffer (it contains stale TUI redraws that
+          // cause glitchy rapid flashing) and instead clear the screen so
+          // the SIGWINCH nudge below yields a single clean repaint.
+          const isCodexAlive = (() => {
+            const s = store.getSession(sessionId);
+            return s && s.provider === 'codex' && manager.isAlive(sessionId);
+          })();
+
+          if (isCodexAlive) {
+            // Clear screen + reset cursor so the SIGWINCH nudge repaints
+            // from a blank slate instead of on top of stale buffer content.
+            safeSend(ws, JSON.stringify({
+              type: 'output', sessionId,
+              data: '\x1b[2J\x1b[H',
+            }));
+          } else {
+            const buffer = manager.getBuffer(sessionId);
+            if (buffer.length > 0) {
+              const combined = buffer.join('');
+              safeSend(ws, JSON.stringify({ type: 'output', sessionId, data: combined }));
+            }
           }
 
           // Flush any data that arrived during replay, then switch to live
