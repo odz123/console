@@ -438,6 +438,17 @@ body {
 
 /* --- Account Modal --- */
 
+#account-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.6);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 150;
+}
+#account-modal-overlay.hidden { display: none; }
+
 .modal-panel {
   background: #1e1d1b;
   border-radius: 8px;
