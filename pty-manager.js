@@ -148,6 +148,11 @@ export class PtyManager {
           cmdArgs.push('--ask-for-approval', providerOptions.approvalMode);
         }
       }
+      // Disable alternate screen so output stays in the normal buffer.
+      // Codex uses alternate screen by default which causes glitchy display
+      // on buffer replay (rapid enter/exit of alt screen) and prevents
+      // scrollback from working properly.
+      cmdArgs.push('--no-alt-screen');
       // --model applies to both new and resumed sessions
       if (providerOptions?.model) {
         cmdArgs.push('--model', providerOptions.model);
