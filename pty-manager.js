@@ -3,9 +3,33 @@ import * as pty from 'node-pty';
 import { EventEmitter } from 'node:events';
 
 const MAX_BUFFER = 1024 * 1024; // 1MB
+const IDLE_TIMEOUT_MS = 1500;
+// Codex TUI has longer pauses between output bursts (e.g. during tool
+// execution) that don't indicate idle.  Use a longer timeout to avoid
+// false idle→working flapping.
+const CODEX_IDLE_TIMEOUT_MS = 5000;
+
+/**
+ * Check if PTY data contains meaningful printable content beyond ANSI
+ * escape / control sequences.  Cursor repositioning, line clears, and
+ * SGR colour changes are NOT considered meaningful — they're TUI chrome
+ * that Codex redraws continuously while idle.
+ */
+function hasMeaningfulContent(data) {
+  // Strip CSI sequences (\x1b[ … <letter>), OSC sequences (\x1b] … BEL/ST),
+  // and simple two-byte escapes (\x1b <char>).
+  const stripped = data
+    .replace(/\x1b\[[0-9;?]*[A-Za-z]/g, '')
+    .replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    .replace(/\x1b[()#][A-Za-z0-9]/g, '')
+    .replace(/\x1b./g, '');
+  // Strip remaining C0 control characters (CR, LF, BS, BEL, …)
+  const printable = stripped.replace(/[\x00-\x1f\x7f]/g, '');
+  return printable.length > 0;
+}
 
 class PtyProcess extends EventEmitter {
-  constructor(ptyProcess) {
+  constructor(ptyProcess, { provider = 'claude' } = {}) {
     super();
     this.pty = ptyProcess;
     this.buffer = [];
@@ -14,6 +38,10 @@ class PtyProcess extends EventEmitter {
     this.idle = false;
     this.idleTimer = null;
     this._idleSuppressedUntil = 0;
+    this.provider = provider;
+    this._idleTimeoutMs = provider === 'codex'
+      ? CODEX_IDLE_TIMEOUT_MS
+      : IDLE_TIMEOUT_MS;
 
     this._scheduleIdleCheck();
 
@@ -23,11 +51,19 @@ class PtyProcess extends EventEmitter {
       // is cosmetic and doesn't indicate real activity.
       const suppressed = Date.now() < this._idleSuppressedUntil;
       if (!suppressed) {
-        if (this.idle) {
-          this.idle = false;
-          this.emit('idle-change', false);
+        // For Codex, only reset the idle timer when data carries printable
+        // content.  Cursor-only redraws (TUI chrome) are ignored so the
+        // timer can fire while Codex is visually idle.
+        const meaningful = this.provider === 'codex'
+          ? hasMeaningfulContent(data)
+          : true;
+        if (meaningful) {
+          if (this.idle) {
+            this.idle = false;
+            this.emit('idle-change', false);
+          }
+          this._scheduleIdleCheck();
         }
-        this._scheduleIdleCheck();
       }
       this._pushToBuffer(data);
       this.emit('data', data);
@@ -54,7 +90,7 @@ class PtyProcess extends EventEmitter {
         this.idle = true;
         this.emit('idle-change', true);
       }
-    }, 1500);
+    }, this._idleTimeoutMs);
   }
 
   _clearIdleTimer() {
@@ -173,7 +209,7 @@ export class PtyManager {
       env: { ...process.env, ...accountEnv, TERM: 'xterm-256color' },
     });
 
-    const proc = new PtyProcess(ptyProcess);
+    const proc = new PtyProcess(ptyProcess, { provider });
     this.processes.set(sessionId, proc);
     return proc;
   }
@@ -338,3 +374,5 @@ export class PtyManager {
     }
   }
 }
+
+export { hasMeaningfulContent as _hasMeaningfulContent };
